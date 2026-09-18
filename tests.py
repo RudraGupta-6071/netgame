@@ -2,9 +2,23 @@
 tests.py -- validation suite for the network security game solver.
 
 Run:  python tests.py
-Every check is an independent verification of a mathematical claim made in
-REPORT.md.  Nothing here is self-referential: closed forms, brute force and
-random sampling are all computed independently of the solver.
+
+Every check numerically validates a mathematical claim made in FORMULATION.md.
+Nothing here is self-referential: closed forms, brute force and random sampling
+are all computed independently of the solver.
+
+WHAT THIS SUITE IS AND IS NOT
+-----------------------------
+These are VALIDATION checks, not proofs.  Randomised sampling over chords, over
+feasible splits, or over instances can only ever show that no violation was
+found on the instances sampled; it cannot establish a universally quantified
+statement.  The convexity theorem (FORMULATION.md S3) rests on its proof there,
+and the checks below are evidence that the IMPLEMENTATION is consistent with
+that proof -- they sanity-check the theorem, they do not prove it.  Check names
+are worded accordingly.
+
+All thresholds come from `tolerances.py` rather than being typed in per check,
+so a pass/fail here can be read against the same numbers the solver reports.
 """
 
 from __future__ import annotations
@@ -15,10 +29,12 @@ import sys
 import numpy as np
 
 import closed_form as cf
+import core
 import graphs
-from core import (PathOracle, brute_force_grid, cut_from, dual_bound_path,
-                  evader_alloc, game_value, heuristic_allocation, psi,
-                  solve_defender)
+import tolerances as tolcfg
+from core import (PathOracle, alloc_residuals, brute_force_grid, cut_from,
+                  dual_bound_path, evader_alloc, game_value,
+                  heuristic_allocation, psi, solve_defender)
 
 RESULTS = []
 
@@ -112,7 +128,12 @@ def test_danskin():
 
 # ---------------------------------------------------------------- convexity
 def test_convexity():
-    print("\n6. Convexity of the defender objective G(x) = max_P g_P(x)")
+    print("\n6. Convexity of G(x) = max_P g_P(x): numerical validation on "
+          "sampled chords")
+    # Sampling cannot prove convexity.  The theorem is proved in
+    # FORMULATION.md S3; what follows numerically validates convexity on
+    # sampled instances, i.e. it sanity-checks that the implementation behaves
+    # as the theorem says it should.
     rng = np.random.default_rng(5)
     worst = 0.0
     for name in ["grid-4x4", "random-12", "layered-3x3", "unequal-1-2-4"]:
@@ -127,8 +148,9 @@ def test_convexity():
             rhs = (t * orc.best_response(a, 10.0)["logval"]
                    + (1 - t) * orc.best_response(b, 10.0)["logval"])
             worst = max(worst, lhs - rhs)
-    check("G(ta+(1-t)b) <= tG(a)+(1-t)G(b) on 160 random chords (m=1)",
-          worst <= 1e-9, f"max violation {worst:.2e}")
+    check("no convexity violation found on 160 sampled chords, m=1 "
+          "(validation of the theorem, not a proof of it)",
+          worst <= tolcfg.CONVEXITY_TOL, f"max violation {worst:.2e}")
 
 
 # ---------------------------------------------------------------- closed forms
@@ -316,7 +338,9 @@ def test_general_m():
                         - t * orc.best_response(a, 10.0)["logval"]
                         - (1 - t) * orc.best_response(b, 10.0)["logval"])
         out[m] = worst
-    check("G is convex for m <= 1", out[0.5] <= 1e-9 and out[1.0] <= 1e-9,
+    check("no convexity violation found on sampled chords for m in {0.5, 1} "
+          "(sanity-checks the m <= 1 convexity theorem)",
+          out[0.5] <= tolcfg.CONVEXITY_TOL and out[1.0] <= tolcfg.CONVEXITY_TOL,
           f"max violation m=0.5: {out[0.5]:.2e},  m=1: {out[1.0]:.2e}")
 
     # explicit counterexample for m > 1.  -log(x^m + c) has second derivative
@@ -325,7 +349,8 @@ def test_general_m():
     f = lambda x1: orc.best_response(np.array([x1, 10.0 - x1]), 10.0)["logval"]
     viol = max(0.5 * f(a) + 0.5 * f(b) - f(0.5 * (a + b))
                for a, b in [(2.0, 4.0), (1.0, 3.0), (2.0, 3.0), (3.0, 5.0)])
-    check("m > 1 genuinely breaks convexity (constructed counterexample)",
+    check("m > 1 genuinely breaks convexity (an explicit counterexample -- "
+          "one violation suffices, unlike the sampling above)",
           viol < -1e-3,
           f"max chord deficit {viol:.3e} on the diamond, m=2 "
           "-> cutting-plane optimality guarantee does NOT extend to m > 1")
@@ -412,6 +437,217 @@ def test_uniqueness():
           worst < 5e-3, f"max coordinate spread across starts {worst:.2e}")
 
 
+# --------------------------------------------------------- closed-form checks
+def test_m1_closed_form():
+    print("\n16. m = 1 closed forms: p_i(t) against the probability from y_i(t)")
+    # p_i(t) = 2t / (x_i + 2t + sqrt(x_i^2 + 4 x_i t)) is the cancellation-free
+    # form of y_i/(x_i + y_i) at the stationary y_i(t).  Check the two agree
+    # over randomised positive x_i and t, including badly scaled ones.
+    rng = np.random.default_rng(21)
+    worst_p, worst_y, worst_q = 0.0, 0.0, 0.0
+    for _ in range(4000):
+        x = float(10.0 ** rng.uniform(-8, 8))
+        t = float(10.0 ** rng.uniform(-8, 8))
+        y = float(core._y_of_t(np.array([x]), t, 1.0)[0])
+        p_closed = float(core._p_of_t(np.array([x]), np.array([y]), t, 1.0)[0])
+        p_direct = y / (x + y)
+        worst_p = max(worst_p, abs(p_closed - p_direct)
+                      / max(p_direct, tolcfg.LOG_FLOOR))
+        # y_i(t) must solve the quadratic y^2 + x y - t x = 0
+        worst_q = max(worst_q, abs(y * y + x * y - t * x)
+                      / max(y * y + x * y + t * x, tolcfg.LOG_FLOOR))
+        # ... and agree with the textbook root where that form is well behaved
+        if 4.0 * x * t > 1e-6 * x * x:
+            y_text = 0.5 * (-x + math.sqrt(x * x + 4.0 * x * t))
+            worst_y = max(worst_y, abs(y - y_text) / max(y_text, 1e-300))
+    check("p_i(t) closed form == y_i/(x_i+y_i) from the computed y_i(t)",
+          worst_p < 1e-12, f"max rel err {worst_p:.2e} over 4000 random (x,t)")
+    check("y_i(t) solves the m=1 stationarity quadratic y^2 + x y - t x = 0",
+          worst_q < 1e-12, f"max rel residual {worst_q:.2e}")
+    check("cancellation-free root agrees with the textbook root where stable",
+          worst_y < 1e-9, f"max rel err {worst_y:.2e}")
+
+
+# ------------------------------------------------------- numerical residuals
+def test_residuals():
+    print("\n17. Residual checks (budget, KKT/stationarity, root, certificate)")
+    rng = np.random.default_rng(24)
+    bud, kkt, root = 0.0, 0.0, 0.0
+    for _ in range(300):
+        n = int(rng.integers(1, 8))
+        x = 10.0 ** rng.uniform(-4, 3, n)
+        XB = float(10.0 ** rng.uniform(-2, 3))
+        sol = evader_alloc(x, XB, diagnostics=True)
+        res = alloc_residuals(x, sol, XB)
+        bud = max(bud, res["budget_rel"])
+        kkt = max(kkt, res["kkt_spread"])
+        root = max(root, res["root_max"])
+        # the diagnostics record must be present and self-consistent
+        assert sol["solver"]["root_tol"] == tolcfg.ROOT_TOL
+        assert sol["solver"]["iterations"] <= sol["solver"]["max_iter"]
+    check(f"evader budget residual |sum y - XB|/XB <= {tolcfg.BUDGET_TOL:g}",
+          bud <= tolcfg.BUDGET_TOL, f"max {bud:.2e}")
+    check(f"KKT/stationarity residual (multiplier spread) <= {tolcfg.KKT_TOL:g}",
+          kkt <= tolcfg.KKT_TOL, f"max {kkt:.2e}")
+    check("root-equation residual y(x^m+y^m) - t m x^m ~ 0 for every solved y_i",
+          root <= 1e-9, f"max relative residual {root:.2e}")
+
+    # the same audit on a full solve, plus the certificate residual
+    G, S, D = graphs.CATALOG["random-12"]()
+    r = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=300)
+    rr = r["residuals"]
+    check("defender budget residual |sum x - XA| within tolerance",
+          rr["defender_budget_abs"] <= tolcfg.BUDGET_TOL * 10.0,
+          f"{rr['defender_budget_abs']:.2e}")
+    check("evader budget residual at the reported optimum within tolerance",
+          rr["budget_rel"] <= tolcfg.BUDGET_TOL, f"{rr['budget_rel']:.2e}")
+    check("KKT residual at the reported optimum within tolerance",
+          rr["kkt_spread"] <= tolcfg.KKT_TOL, f"{rr['kkt_spread']:.2e}")
+    check("certificate residual UB - LB matches the reported gap",
+          abs(rr["certificate_abs_gap"] - r["certificate"]["abs_gap"]) < 1e-15,
+          f"{rr['certificate_abs_gap']:.2e}")
+    pc = rr["path_cost_consistency"]
+    check("shortest-path cost == sum of node costs c_i(lambda) along the path",
+          pc is None or pc < 1e-9,
+          "enumeration mode (relaxation unused)" if pc is None else f"{pc:.2e}")
+
+
+# ------------------------------------------------------ certificate reporting
+def test_certificate_reporting():
+    print("\n18. Certificate is conditional on the gap closing")
+    G, S, D = graphs.CATALOG["lecture"]()
+    r = solve_defender(G, S, D, 10.0, 10.0, tol=1e-10, max_iter=400)
+    c = r["certificate"]
+    for key in ["log_ub", "log_lb", "abs_gap", "rel_gap",
+                "rel_gap_denominator", "tolerance", "certified", "status",
+                "iterations", "n_cuts", "runtime_sec", "solver_settings"]:
+        if key not in c:
+            check(f"certificate reports {key}", False)
+            return
+    check("certificate reports UB, LB, abs/rel gap, tolerance, status, "
+          "iterations, cuts, runtime and solver settings", True)
+    check("gap closed  =>  certified", c["certified"] and c["abs_gap"] <= c["tolerance"],
+          f"gap {c['abs_gap']:.2e} <= tol {c['tolerance']:.1e}")
+    check("LB <= UB and V* lies inside the reported bracket",
+          c["log_lb"] <= c["log_ub"] + 1e-15
+          and c["value_lb"] <= r["value"] + 1e-12 <= c["value_ub"] + 1e-12)
+
+    # A deliberately starved run must NOT be reported as certified.
+    G, S, D = graphs.layered(8, 4)
+    r2 = solve_defender(G, S, D, 10.0, 10.0, tol=1e-12, max_iter=3)
+    c2 = r2["certificate"]
+    check("a run stopped before the gap closes is reported NOT certified",
+          (not c2["certified"]) and c2["abs_gap"] > c2["tolerance"]
+          and "not certified" in c2["status"],
+          f"gap {c2['abs_gap']:.2e} > tol {c2['tolerance']:.1e}, "
+          f"status '{c2['status']}'")
+
+    # m > 1: convexity provably fails, so nothing there may be called certified.
+    G, S, D = graphs.diamond()
+    r3 = solve_defender(G, S, D, 10.0, 10.0, m=2.0, tol=1e-8, max_iter=80)
+    check("m > 1 runs are never certified (convexity provably fails)",
+          (not r3["certified"]) and not r3["certificate"]["convexity_proved"],
+          r3["certificate"]["status"])
+
+
+# --------------------------------------------------------- zero defence (C1)
+def test_zero_defence_boundary():
+    print("\n19. Zero-defence boundary x_i = 0 (model value, not a floor artefact)")
+    # The MODEL allows x_i = 0 exactly: convention (C1) gives p_i = 1 there.
+    # These checks pass exact zeros -- never the numerical floor -- and verify
+    # that the answer is the model's boundary solution.
+    sol = evader_alloc(np.array([0.0, 2.0, 3.0]), 10.0)
+    check("x_i = 0 gets zero evader budget and p_i = 1 exactly",
+          sol["y"][0] == 0.0 and sol["p"][0] == 1.0)
+    check("the remaining budget is spent entirely on the defended nodes",
+          abs(sol["y"].sum() - 10.0) < 1e-12 * 10.0)
+    ref = evader_alloc(np.array([2.0, 3.0]), 10.0)
+    check("value at (0, x2, x3) equals the value of the sub-path (x2, x3)",
+          abs(sol["logval"] - ref["logval"]) < 1e-12,
+          f"diff {abs(sol['logval']-ref['logval']):.2e}")
+
+    all_zero = evader_alloc(np.zeros(4), 10.0)
+    check("a fully undefended path has value exactly 1 (log 0)",
+          all_zero["logval"] == 0.0 and np.all(all_zero["p"] == 1.0))
+
+    # x_i = 0 must be the LIMIT of x_i -> 0+, not a discontinuity introduced by
+    # the floor: the floor only ever perturbs the value by ~sqrt(x_min/t).
+    gaps = []
+    for eps in [1e-6, 1e-8, 1e-10, 1e-12]:
+        s_eps = evader_alloc(np.array([eps, 2.0, 3.0]), 10.0)
+        gaps.append(abs(s_eps["logval"] - sol["logval"]))
+    check("value at x_1 = eps -> value at x_1 = 0 as eps -> 0 (C1 is the "
+          "continuous extension, so the floor is not what sets the answer)",
+          all(b <= a + 1e-15 for a, b in zip(gaps, gaps[1:])) and gaps[-1] < 1e-5,
+          "  ".join(f"{g:.2e}" for g in gaps))
+
+    # a solved instance whose optimum genuinely puts zero on some nodes
+    G, S, D = graphs.CATALOG["random-12"]()
+    r = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=300)
+    xmin_floor = max(tolcfg.X_FLOOR_ABS,
+                     tolcfg.X_FLOOR_REL * 10.0 / len(r["nodes"]))
+    zeros = [v for v in r["nodes"] if r["x"][v] == 0.0]
+    near = [v for v in r["nodes"] if 0.0 < r["x"][v] <= 10.0 * xmin_floor]
+    check("the optimum really does zero out some nodes here, and they sit at "
+          "exactly 0 rather than at the numerical floor (so a reported zero "
+          "is the model's boundary solution)",
+          len(zeros) > 0 and len(near) == 0,
+          f"{len(zeros)} exact zeros, {len(near)} nodes pinned near the "
+          f"floor {xmin_floor:.1e}")
+    x0 = {v: (0.0 if v in zeros else r["x"][v]) for v in r["nodes"]}
+    v0 = game_value(G, S, D, x0, 10.0, oracle=r["oracle"])["value"]
+    check("re-evaluating that allocation with exact zeros reproduces V*",
+          abs(v0 - r["value"]) <= 1e-9, f"{abs(v0-r['value']):.2e}")
+
+
+# ------------------------------------------------------- adaptive dual search
+def test_lambda_search_adaptive():
+    print("\n20. Dual multiplier search adapts instead of trusting a fixed range")
+    G, S, D = graphs.random_dag(10, 0.3, seed=23)
+    orc = PathOracle(G, S, D, mode="ksp")
+    rng = np.random.default_rng(23)
+
+    # (a) extreme input scales: lambda ~ 1/t moves with the budget scale, so a
+    # hard-coded log10 window can be left behind.  The adaptive search must
+    # still produce a VALID upper bound on the true best response.
+    worst = 0.0
+    for scale in [1e-8, 1e-4, 1.0, 1e4, 1e8]:
+        x = rng.dirichlet(np.ones(len(orc.nodes))) * scale
+        br = orc.best_response(x, scale)
+        worst = min(worst, br["ub"] - br["logval"])
+    check("dual bound stays valid across 16 orders of magnitude of input scale",
+          worst >= -tolcfg.CERT_SLACK, f"min slack {worst:.2e}")
+
+    # (b) with a deliberately misplaced starting bracket the search must expand
+    # it and recover the same multiplier as the default bracket does.
+    x = rng.dirichlet(np.ones(len(orc.nodes))) * 10.0
+    ref = PathOracle(G, S, D, mode="ksp")
+    lam_ref, u_ref = ref._best_lambda(x, 10.0)
+    bad = PathOracle(G, S, D, mode="ksp", lam_log_range=(-40.0, -30.0))
+    lam_bad, u_bad = bad._best_lambda(x, 10.0)
+    check("a misplaced starting bracket is expanded, not silently accepted",
+          bad.last_lambda_search["expansions"] > 0
+          and not bad.last_lambda_search["at_boundary"],
+          f"{bad.last_lambda_search['expansions']} expansions, final bracket "
+          f"{tuple(round(v, 1) for v in bad.last_lambda_search['bracket'])}")
+    check("the recovered bound matches the one from the default bracket",
+          abs(u_bad - u_ref) <= 1e-9 * max(abs(u_ref), 1.0),
+          f"U_bad {u_bad:.12f} vs U_ref {u_ref:.12f}  "
+          f"(lambda {lam_bad:.4g} vs {lam_ref:.4g})")
+
+    # (c) boundary detection must be reported, not hidden: with expansion
+    # disabled and a bracket that excludes the optimum, the search says so.
+    stuck = PathOracle(G, S, D, mode="ksp", lam_log_range=(-40.0, -30.0),
+                       lam_expand_max=0)
+    stuck._best_lambda(x, 10.0)
+    check("a search that terminates on a bracket boundary flags at_boundary",
+          stuck.last_lambda_search["at_boundary"] is True,
+          f"bracket {stuck.last_lambda_search['bracket']}")
+    check("the lambda bracket is configurable (not hard-coded)",
+          tuple(ref.lam_log_range) == (tolcfg.LAMBDA_LOG_LO, tolcfg.LAMBDA_LOG_HI)
+          and tuple(bad.lam_log_range) == (-40.0, -30.0))
+
+
 def main():
     print("=" * 74)
     print("  NETWORK SECURITY GAME -- VALIDATION SUITE")
@@ -421,7 +657,10 @@ def main():
               test_convexity, test_closed_forms, test_oracle_equivalence,
               test_brute_force, test_heuristics_never_better,
               test_comparative_statics, test_uncovered_path, test_general_m,
-              test_contested_endpoints, test_uniqueness]:
+              test_contested_endpoints, test_uniqueness,
+              test_m1_closed_form, test_residuals,
+              test_certificate_reporting, test_zero_defence_boundary,
+              test_lambda_search_adaptive]:
         try:
             t()
         except Exception as exc:                        # pragma: no cover

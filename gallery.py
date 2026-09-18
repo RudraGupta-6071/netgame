@@ -1,4 +1,9 @@
-"""Gallery: assorted topologies, their optimal defence and the evader's best path."""
+"""Gallery: assorted topologies, the best defence found and the evader's best path.
+
+Each panel reports the gap and whether the optimality certificate actually
+closed at the requested tolerance; `cert=no` marks an accurate-looking value
+that has not been proved optimal.
+"""
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -101,21 +106,24 @@ for ax, (title, G, S, D, fixed) in zip(axes.ravel(), build_cases()):
                             font_color="white", font_weight="bold")
 
     npaths = r.get("n_paths", 0)
+    cert = "yes" if r.get("certified") else "no"
     ax.set_title(f"{title}\n$V^*$ = {r['value']:.6f}   ({npaths} paths, "
-                 f"gap {r['gap']:.0e})", fontsize=10)
+                 f"gap {r['gap']:.0e}, cert={cert})", fontsize=10)
     ax.axis("off")
 
     rows.append((title.split("\n")[0], len(r["nodes"]), npaths, r["value"],
-                 r["gap"], " -> ".join(best) if best else "-"))
+                 r["gap"], cert, " -> ".join(best) if best else "-"))
 
-fig.suptitle("Optimal defence across topologies  "
+fig.suptitle("Best defence found across topologies  "
              "(node label & size = defence budget;  red = evader's best path;  "
-             "$\\bar{x}_A=\\bar{x}_B=10$)", fontsize=13, y=0.995)
+             "$\\bar{x}_A=\\bar{x}_B=10$;  cert = certificate closed at "
+             "tol 1e-9)", fontsize=13, y=0.995)
 plt.tight_layout(rect=[0, 0, 1, 0.985])
 plt.savefig("out/GALLERY.png", dpi=135)
 print("saved out/GALLERY.png\n")
 
-print(f"{'topology':32s} {'contested':>9s} {'paths':>7s} {'V*':>11s} {'gap':>9s}  best path")
-print("-" * 118)
-for name, nc, npth, v, gap, bp in rows:
-    print(f"{name:32s} {nc:9d} {npth:7d} {v:11.6f} {gap:9.1e}  {bp}")
+print(f"{'topology':32s} {'contested':>9s} {'paths':>7s} {'V*':>11s} "
+      f"{'gap':>9s} {'cert':>5s}  best path")
+print("-" * 124)
+for name, nc, npth, v, gap, cert, bp in rows:
+    print(f"{name:32s} {nc:9d} {npth:7d} {v:11.6f} {gap:9.1e} {cert:>5s}  {bp}")

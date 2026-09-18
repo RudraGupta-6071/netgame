@@ -9,7 +9,15 @@ run_all.py -- reproduce the entire project with one command.
 Everything is seeded, so the numerical results regenerate exactly; measured
 runtimes vary with hardware and system load and are not reproducible.
 Outputs land in out/ :  *.csv tables, *.json raw results, *.png figures,
-plus out/tests.log and out/experiments.log.
+plus out/tests.log, out/experiments.log and out/RUN_METADATA.json (seeds,
+package versions, repository commit, hardware, runtime methodology and the
+tolerance configuration behind every number -- see repro.py).
+
+Reading the results: each experiment table reports the optimality certificate
+explicitly (log_ub, log_lb, abs_gap, rel_gap, tol, certified, cert_status,
+iters, cuts, sec).  A row with certified=no is an accurate value that has NOT
+been proved optimal; only certified=yes rows carry a global optimality
+certificate.
 """
 
 import os
@@ -51,6 +59,9 @@ def main():
         rc |= run("experiments.py", [], "experiments.log", "EXPERIMENTS")
 
     print("\n" + "=" * 70)
+    print("  A run is CERTIFIED only where its reported UB-LB gap closed within")
+    print("  the stated tolerance; see the certified / cert_status columns.")
+    print("=" * 70)
     print("  artefacts in", OUT)
     for f in sorted(os.listdir(OUT)):
         print("   ", f)

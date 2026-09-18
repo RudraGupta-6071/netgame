@@ -22,24 +22,41 @@ Directed graph G=(V,E), source S, terminus D.
         V* = min_x max_P max_y  U_B(P,x,y)
 
 Everything is computed in LOG space,  g(x) = log U_B, which is where the
-problem is convex in x (see FORMULATION / REPORT).
+problem is convex in x (see FORMULATION.md S3).
 
 CONVENTIONS
 -----------
 * x_i = 0  =>  node i is undefended, p_i = 1 and B spends y_i = 0 there.
   This is the continuous extension of the CSF (p_i -> 1 as x_i -> 0+ along
   the evader's optimal response), so the value function stays continuous.
+  x_i = 0 is a legal point of the MODEL.  Any small positive floor appearing
+  below (tolerances.X_FLOOR_REL) is a NUMERICAL safeguard against the
+  1/(x_i + y_i) singularity of the subgradient, never a model constraint;
+  the solver also evaluates exactly-sparse points, so a reported optimum with
+  x_i = 0 is the model's boundary solution rather than an artefact of the
+  floor.
 * Source and terminus are uncontested by default (contest_endpoints=False).
-  Set contest_endpoints=True to force S and D onto every path.
+  Set contest_endpoints=True to force S and D onto every path.  ONE convention
+  governs both the contest product and the budget allocation: a node is
+  contested (enters the product over P) exactly when it is eligible for
+  defender budget and for the evader's split.  `relevant_nodes` and
+  `path_interior` are the single source of truth for that set.
 
-KEY FACTS USED (proved in REPORT.md)
-------------------------------------
-P1  Inner problem is strictly concave in y  -> unique optimum, KKT + monotone
-    bisection on the multiplier.
+KEY FACTS USED (proved in FORMULATION.md)
+-----------------------------------------
+P1  The inner problem is strictly concave in y on the nodes with x_i > 0, so
+    the interior response there is unique; it is solved as a KKT system
+    reduced to one monotone scalar root.  Nodes with x_i = 0 are handled by
+    the convention above (p_i = 1, y_i = 0), not by the KKT system, and the
+    strict-concavity/uniqueness statement is not extended to them.
 P2  g_P(x) = max_y h(x,y) is CONVEX in x for 0 < m <= 1, because h(.,y) is
     convex in x for every fixed y and a pointwise sup of convex functions is
-    convex.  G(x) = max_P g_P(x) is therefore convex too.
-P3  Danskin: s_i = d g_P / d x_i = -m x_i^(m-1) / (x_i^m + y_i*^m).
+    convex.  G(x) = max_P g_P(x) is therefore convex too.  This is convexity,
+    NOT strict convexity: g_P ignores the coordinates off P, so G is flat in
+    those directions and uniqueness of the minimiser does not follow.
+P3  Danskin: s_i = d g_P / d x_i = -m x_i^(m-1) / (x_i^m + y_i*^m).  This is
+    asserted where the inner maximiser y* is unique and strictly positive on
+    the active set and x_i > 0; it is not claimed at the nonsmooth boundary.
 P4  Any FEASIBLE y (not only the optimal one) yields a VALID cut, because
     g_P(x) >= h(x,y) >= tangent of h(.,y).  Lower bounds are therefore robust
     to inner-solver error.
@@ -47,6 +64,24 @@ P5  Lagrangian/weak duality: for every lam > 0,
         g_P(x) <= lam*XB + sum_{i in P} psi(x_i, lam),
     with equality at the optimal lam.  psi is separable => the bound is a
     SHORTEST-PATH problem => certified stopping rule for path generation.
+
+WHAT "CERTIFIED" MEANS HERE
+---------------------------
+`solve_defender` returns a rigorous bracket [LB, UB] on log V*.  A run carries
+a global optimality certificate ONLY when UB - LB closes within the requested
+tolerance.  The returned dict reports UB, LB, the absolute gap, the relative
+gap (with its denominator stated), the requested tolerance, the iteration and
+cut counts, the runtime and a boolean `certified`.  Runs that stop at the
+iteration cap with a nonzero gap are reported as NOT certified.  The
+certificate is meaningful only because the implemented upper and lower bounds
+refer to the same optimization problem, and it is stated net of the numerical
+tolerances listed in `tolerances.py`.
+
+The path-selection subproblem is closely related to maximum-reliability path
+problems known to be NP-hard; consequently we use a certified path-generation
+procedure (P5) rather than claiming a polynomial-time exact oracle.  No
+reduction establishing NP-hardness of the exact continuous Tullock-budget
+model solved here is supplied, and none is claimed.
 """
 
 from __future__ import annotations
@@ -59,11 +94,13 @@ import networkx as nx
 import numpy as np
 from scipy.optimize import linprog
 
+import tolerances as tolcfg
+
 __all__ = [
     "relevant_nodes", "enumerate_paths", "path_interior",
-    "evader_alloc", "psi", "dual_bound_path",
-    "PathOracle", "game_value", "solve_defender",
-    "heuristic_allocation", "brute_force_grid",
+    "evader_alloc", "alloc_residuals", "psi", "dual_bound_path",
+    "PathOracle", "game_value", "solve_defender", "certificate",
+    "heuristic_allocation", "brute_force_grid", "sparsify_alloc",
 ]
 
 # ----------------------------------------------------------------------------
@@ -101,18 +138,29 @@ def enumerate_paths(G, S, D, limit=200000):
 
 
 # ----------------------------------------------------------------------------
-# 1.  Inner problem: evader's budget split on a FIXED path  (exact)
+# 1.  Inner problem: evader's budget split on a FIXED path
+#     (solved NUMERICALLY to tolerance -- not a symbolic/exact solution)
 # ----------------------------------------------------------------------------
 
 
-def _y_of_t(xv, t, m=1.0):
+def _y_of_t(xv, t, m=1.0, root_tol=None, max_iter=None):
     """Stationary y_i as a function of t = 1/lambda.
 
     KKT:  m x^m / (y (x^m + y^m)) = lambda   <=>   y (x^m + y^m) = t m x^m.
     The left side is strictly increasing in y, so the root is unique.
-    For m = 1 this is the quadratic y^2 + x y - t x = 0 with the
-    cancellation-free root  y = 2xt / (x + sqrt(x^2 + 4xt)).
+
+    For m = 1 this is the quadratic y^2 + x y - t x = 0, whose positive root is
+    returned in the cancellation-free form  y = 2xt / (x + sqrt(x^2 + 4xt))
+    (algebraically identical to (-x + sqrt(x^2 + 4xt))/2, but stable when
+    4xt << x^2).  That branch is a closed form evaluated in floating point.
+
+    For m != 1 the root is found by safeguarded Newton, i.e. NUMERICALLY, to
+    the relative tolerance `root_tol`, or until `max_iter` iterations have been
+    taken.  The stopping criterion is the relative step test
+    |y_new - y| <= root_tol * y.
     """
+    root_tol = tolcfg.ROOT_TOL if root_tol is None else root_tol
+    max_iter = tolcfg.ROOT_MAX_ITER if max_iter is None else max_iter
     xv = np.asarray(xv, dtype=float)
     if m == 1.0:
         return 2.0 * xv * t / (xv + np.sqrt(xv * xv + 4.0 * xv * t))
@@ -120,23 +168,45 @@ def _y_of_t(xv, t, m=1.0):
     target = t * m * xm
     # F(y) = y*x^m + y^(m+1) - target is increasing and convex on y > 0, so
     # Newton started from any point with F <= 0 converges monotonically.
-    y = 0.5 * np.minimum(target / np.maximum(xm, 1e-300),
+    y = 0.5 * np.minimum(target / np.maximum(xm, tolcfg.LOG_FLOOR),
                          target ** (1.0 / (m + 1.0)))
-    y = np.maximum(y, 1e-300)
-    for _ in range(60):
+    y = np.maximum(y, tolcfg.LOG_FLOOR)
+    for _ in range(max_iter):
         F = y * xm + y ** (m + 1.0) - target
         dF = xm + (m + 1.0) * y ** m
         step = F / dF
         y_new = np.maximum(y - step, 0.5 * y)          # safeguard
-        if np.all(np.abs(y_new - y) <= 1e-14 * np.maximum(y, 1e-300)):
+        if np.all(np.abs(y_new - y)
+                  <= root_tol * np.maximum(y, tolcfg.LOG_FLOOR)):
             y = y_new
             break
         y = y_new
     return y
 
 
+def _root_residual(xv, yv, t, m=1.0):
+    """Relative residual of the stationarity root  y (x^m + y^m) - t m x^m = 0.
+
+    Reported per node so that a numerically solved y_i can be audited rather
+    than assumed correct.
+    """
+    xv = np.asarray(xv, dtype=float)
+    yv = np.asarray(yv, dtype=float)
+    xm = xv ** m
+    lhs = yv * (xm + yv ** m)
+    rhs = t * m * xm
+    scale = np.maximum(np.abs(lhs) + np.abs(rhs), tolcfg.LOG_FLOOR)
+    return np.abs(lhs - rhs) / scale
+
+
 def _p_of_t(xv, yv, t, m=1.0):
-    """p_i at the stationary point (cancellation-free closed form for m = 1)."""
+    """p_i at the stationary point (cancellation-free closed form for m = 1).
+
+    For m = 1 this is  p_i(t) = 2t / (x_i + 2t + sqrt(x_i^2 + 4 x_i t)),
+    algebraically the same as y_i/(x_i + y_i) evaluated at the stationary
+    y_i(t).  `tests.test_m1_closed_form` checks numerically that the two agree
+    over randomised positive x_i and t.
+    """
     xv = np.asarray(xv, dtype=float)
     if m == 1.0:
         return 2.0 * t / (xv + 2.0 * t + np.sqrt(xv * xv + 4.0 * xv * t))
@@ -144,52 +214,128 @@ def _p_of_t(xv, yv, t, m=1.0):
     return ym / (xv ** m + ym)
 
 
-def evader_alloc(x_path, XB, m=1.0, iters=60):
-    """Exact solution of   max_y sum log p_i   s.t.  sum y_i = XB,  y >= 0.
+def alloc_residuals(x_path, sol, XB, m=1.0):
+    """Audit a returned evader allocation against the conditions it should meet.
+
+    Returns a dict with
+
+      budget_abs / budget_rel   |sum y_i - XB| and its relative form
+      kkt_spread                relative spread of the stationarity multipliers
+                                m x_i^m / (y_i (x_i^m + y_i^m)) over the ACTIVE
+                                nodes (x_i > 0); this is the KKT/stationarity
+                                residual, and it is 0 at an exact solution
+      root_max                  max relative residual of the scalar root
+                                y (x^m + y^m) = t m x^m over the active nodes
+      n_active                  number of nodes with x_i > 0
+
+    Inactive nodes (x_i = 0) are excluded deliberately: there the model sets
+    p_i = 1 and y_i = 0 by convention (C1) and no stationarity condition is
+    claimed, so including them would report a meaningless residual.
+    """
+    x_path = np.asarray(x_path, dtype=float)
+    y = np.asarray(sol["y"], dtype=float)
+    act = x_path > 0.0
+    out = {"budget_abs": float(abs(y.sum() - XB)),
+           "budget_rel": float(abs(y.sum() - XB) / max(abs(XB), 1e-300)),
+           "n_active": int(act.sum()), "kkt_spread": 0.0, "root_max": 0.0}
+    if act.sum() == 0:
+        return out
+    xa = x_path[act]
+    ya = np.maximum(y[act], tolcfg.Y_FLOOR)
+    lam = m * xa ** m / (ya * (xa ** m + ya ** m))
+    out["kkt_spread"] = float((lam.max() - lam.min()) / max(lam.mean(), 1e-300))
+    t = sol.get("t", 0.0)
+    if t > 0:
+        out["root_max"] = float(_root_residual(xa, ya, t, m).max())
+    return out
+
+
+def evader_alloc(x_path, XB, m=1.0, iters=None, root_tol=None,
+                 diagnostics=False):
+    """High-precision NUMERICAL solution of
+           max_y sum log p_i   s.t.  sum y_i = XB,  y >= 0.
+
+    The KKT system is reduced to the single monotone equation
+    S(t) = sum_i y_i(t) = XB, that root is solved numerically (safeguarded
+    Newton inside a maintained bracket), and the resulting y is then rescaled
+    to satisfy the budget in floating point.  The returned vector is therefore
+    a floating-point solution accurate to the tolerances configured in
+    `tolerances.py` -- it is numerically solved to tolerance, not an exact
+    symbolic solution.  Use `alloc_residuals`, or `diagnostics=True`, to audit
+    it rather than assuming it.
 
     Parameters
     ----------
     x_path : array of defender allocations on the contested nodes of one path
     XB     : evader budget
     m      : contest intensity
+    iters  : cap on iterations of the outer root S(t) = XB
+             (default tolerances.ROOT_MAX_ITER)
+    root_tol : relative stopping tolerance (default tolerances.ROOT_TOL)
+    diagnostics : when True, add a `solver` sub-dict recording the root-solving
+             tolerance, the iteration cap, the iterations actually used, the
+             stopping criterion, the final root residual |S(t) - XB|/XB before
+             rescaling, and the post-rescale budget and KKT residuals.
 
-    Returns dict with keys y, p, logval, lam (= multiplier), t (= 1/lam).
-    `y` is exactly budget feasible, and logval is computed from that `y`,
-    so logval is always an attainable (lower) value -- see P4.
+    Returns dict with keys y, p, logval, lam (= multiplier), t (= 1/lam), plus
+    `solver` when diagnostics=True.  `y` is budget feasible to floating-point
+    accuracy and logval is computed from that same `y`, so logval is always an
+    attainable (lower) value -- see P4.
     """
+    iters = tolcfg.ROOT_MAX_ITER if iters is None else iters
+    root_tol = tolcfg.ROOT_TOL if root_tol is None else root_tol
     x_path = np.asarray(x_path, dtype=float)
     n = x_path.size
     y = np.zeros(n)
     p = np.ones(n)
+
+    def _trivial(res):
+        if diagnostics:
+            res["solver"] = {"root_tol": root_tol, "max_iter": iters,
+                             "iterations": 0,
+                             "stopping_criterion": "trivial (no active node)",
+                             "root_residual_rel": 0.0,
+                             "budget_residual_abs": 0.0,
+                             "budget_residual_rel": 0.0,
+                             "kkt_spread": 0.0, "root_max": 0.0}
+        return res
+
     if n == 0 or XB <= 0:
-        return {"y": y, "p": p, "logval": 0.0 if XB > 0 or n == 0 else -np.inf,
-                "lam": np.inf, "t": 0.0}
+        return _trivial({"y": y, "p": p,
+                         "logval": 0.0 if XB > 0 or n == 0 else -np.inf,
+                         "lam": np.inf, "t": 0.0})
 
     act = x_path > 0.0
     if not act.any():                          # whole path undefended
-        return {"y": y, "p": p, "logval": 0.0, "lam": np.inf, "t": 0.0}
+        return _trivial({"y": y, "p": p, "logval": 0.0, "lam": np.inf,
+                         "t": 0.0})
 
     xa = x_path[act]
 
     # --- bracket t so that sum y(t) = XB (sum y is strictly increasing in t)
     t_lo, t_hi = 1e-30, 1.0
     for _ in range(400):
-        if _y_of_t(xa, t_hi, m).sum() >= XB:
+        if _y_of_t(xa, t_hi, m, root_tol, iters).sum() >= XB:
             break
         t_hi *= 4.0
     for _ in range(400):
-        if _y_of_t(xa, t_lo, m).sum() <= XB:
+        if _y_of_t(xa, t_lo, m, root_tol, iters).sum() <= XB:
             break
         t_lo /= 4.0
 
     # --- safeguarded Newton on  S(t) = sum_i y_i(t) = XB
-    #     S'(t) = sum_i m x^m / (x^m + (m+1) y^m)      (exact)
+    #     S'(t) = sum_i m x^m / (x^m + (m+1) y^m)      (analytic derivative)
+    #     Stopping criterion: |S(t) - XB| <= root_tol * XB, else `iters` steps.
     t = math.sqrt(t_lo * t_hi)
     xam = xa ** m
+    used = 0
+    stop = f"iteration cap ({iters}) reached"
     for _ in range(iters):
-        ya = _y_of_t(xa, t, m)
+        used += 1
+        ya = _y_of_t(xa, t, m, root_tol, iters)
         S = ya.sum()
-        if abs(S - XB) <= 1e-15 * XB:
+        if abs(S - XB) <= root_tol * XB:
+            stop = f"|S(t) - XB| <= root_tol * XB (root_tol = {root_tol:g})"
             break
         if S < XB:
             t_lo = t
@@ -201,28 +347,56 @@ def evader_alloc(x_path, XB, m=1.0, iters=60):
             t_new = math.sqrt(t_lo * t_hi)
         t = t_new
 
-    ya = _y_of_t(xa, t, m)
+    ya = _y_of_t(xa, t, m, root_tol, iters)
+    root_res = float(abs(ya.sum() - XB) / max(XB, 1e-300))
     s = ya.sum()
     if s > 0:
-        ya = ya * (XB / s)                     # exact budget feasibility
-    ya = np.maximum(ya, 1e-300)
+        # Rescaling to hit the budget exactly in floating point is what makes
+        # the answer a numerical solution rather than a solution of the KKT
+        # system alone; the residuals below quantify what that costs.
+        ya = ya * (XB / s)
+    ya = np.maximum(ya, tolcfg.Y_FLOOR)
     pa = (ya ** m) / (xa ** m + ya ** m)
 
     y[act] = ya
     p[act] = pa
-    return {"y": y, "p": p, "logval": float(np.log(p).sum()),
-            "lam": 1.0 / t, "t": t}
+    out = {"y": y, "p": p, "logval": float(np.log(p).sum()),
+           "lam": 1.0 / t, "t": t}
+    if diagnostics:
+        res = alloc_residuals(x_path, out, XB, m)
+        out["solver"] = {"root_tol": root_tol, "max_iter": iters,
+                         "iterations": used, "stopping_criterion": stop,
+                         "root_residual_rel": root_res,
+                         "budget_residual_abs": res["budget_abs"],
+                         "budget_residual_rel": res["budget_rel"],
+                         "kkt_spread": res["kkt_spread"],
+                         "root_max": res["root_max"]}
+    return out
 
 
 def cut_from(x_path, y, m=1.0):
-    """Danskin subgradient of g_P at x_path (P3).  Valid for any feasible y."""
+    """Danskin subgradient of g_P at x_path (P3), for any budget-feasible y.
+
+    Assumptions under which this is the derivative of g_P.  Danskin's theorem
+    gives  d g_P / d x_i = -m x_i^(m-1) / (x_i^m + y_i*^m)  (= -1/(x_i + y_i*)
+    at m = 1) when the inner maximiser y* is UNIQUE and the objective is
+    differentiable in x at the point in question -- i.e. at x_i > 0, with y*
+    strictly positive and interior on the active set.  At x_i = 0 the model's
+    convention (C1) takes over, g_P is nonsmooth there, and the expression
+    below is NOT claimed to be the derivative: it is clamped by the floors and
+    the solver never builds cuts at exactly-sparse points (see
+    `solve_defender`).  For any feasible (not necessarily optimal) y the
+    returned vector is still a valid subgradient of h(., y) <= g_P, which is
+    all the cutting-plane lower bound needs (P4).
+    """
     x_path = np.asarray(x_path, dtype=float)
     y = np.asarray(y, dtype=float)
     if m == 1.0:
         denom = x_path + y
     else:
-        denom = (x_path ** m + y ** m) / np.maximum(m * x_path ** (m - 1.0), 1e-300)
-    return -1.0 / np.maximum(denom, 1e-300)
+        denom = ((x_path ** m + y ** m)
+                 / np.maximum(m * x_path ** (m - 1.0), tolcfg.LOG_FLOOR))
+    return -1.0 / np.maximum(denom, tolcfg.LOG_FLOOR)
 
 
 # ----------------------------------------------------------------------------
@@ -240,7 +414,7 @@ def psi(xv, lam, m=1.0):
         t = 1.0 / lam
         ya = _y_of_t(xa, t, m)
         pa = _p_of_t(xa, ya, t, m)
-        out[act] = np.log(np.maximum(pa, 1e-300)) - lam * ya
+        out[act] = np.log(np.maximum(pa, tolcfg.LOG_FLOOR)) - lam * ya
     return out
 
 
@@ -257,8 +431,10 @@ def dual_bound_path(x_path, XB, lam, m=1.0):
 class PathOracle:
     """Evader best-response engine.
 
-    mode = 'enum' : exact, enumerates every simple S-D path.
-    mode = 'ksp'  : exact *with a certificate*.  Paths are generated in
+    mode = 'enum' : enumerates every simple S-D path, so the maximisation over
+                    paths is complete by construction (the per-path allocations
+                    are still numerical).
+    mode = 'ksp'  : complete *with a certificate*.  Paths are generated in
                     increasing Lagrangian cost order (Yen's algorithm); since
                     g_P <= lam*XB - c_lam(P) and c_lam is non-decreasing along
                     the enumeration, the search can stop as soon as
@@ -267,10 +443,20 @@ class PathOracle:
     """
 
     def __init__(self, G, S, D, m=1.0, contest_endpoints=False,
-                 mode="auto", enum_limit=20000, ksp_limit=4000):
+                 mode="auto", enum_limit=20000, ksp_limit=4000,
+                 lam_log_range=None, lam_expand_max=None):
         self.G, self.S, self.D, self.m = G, S, D, m
         self.contest_endpoints = contest_endpoints
         self.ksp_limit = ksp_limit
+        # Search bracket on log10(lambda).  lambda > 0 carries no upper bound
+        # mathematically, so this is only a STARTING bracket: `_best_lambda`
+        # expands it adaptively whenever the minimiser lands on an endpoint.
+        self.lam_log_range = tuple(lam_log_range) if lam_log_range is not None \
+            else (tolcfg.LAMBDA_LOG_LO, tolcfg.LAMBDA_LOG_HI)
+        self.lam_expand_max = (tolcfg.LAMBDA_EXPAND_MAX
+                               if lam_expand_max is None else lam_expand_max)
+        #: diagnostics from the most recent dual search (see `_best_lambda`)
+        self.last_lambda_search = None
         self.nodes = relevant_nodes(G, S, D, contest_endpoints)
         self.index = {v: i for i, v in enumerate(self.nodes)}
 
@@ -331,33 +517,78 @@ class PathOracle:
         length, path = nx.single_source_dijkstra(self.H, self.S, self.D, weight="w")
         return length + self._src_cost, path
 
-    def _best_lambda(self, x_vec, XB, grid=25, golden=40):
-        """Minimise U(lam) = lam*XB - SP(lam) over lam > 0 (U is convex)."""
-        lo, hi = -12.0, 12.0                    # log10 lam
-        ls = np.linspace(lo, hi, grid)
-        vals = []
-        for L in ls:
-            lam = 10.0 ** L
-            length, _ = self._dual_at(x_vec, lam)
-            vals.append(lam * XB - length)
-        k = int(np.argmin(vals))
+    def _U(self, x_vec, log_lam, XB):
+        """U(lam) = lam*XB - SP(lam) at lam = 10**log_lam (convex in lam)."""
+        lam = 10.0 ** log_lam
+        return lam * XB - self._dual_at(x_vec, lam)[0]
+
+    def _best_lambda(self, x_vec, XB, grid=None, golden=None):
+        """Minimise U(lam) = lam*XB - SP(lam) over lam > 0 (U is convex).
+
+        lambda ranges over (0, infinity); no finite bracket is implied by the
+        mathematics.  A fixed window on log10(lambda) can therefore miss the
+        useful multiplier entirely at extreme input scales, which shows up as a
+        loose upper bound rather than as an error.  This routine starts from
+        the configurable window `self.lam_log_range` and EXPANDS it adaptively:
+        while the discrete minimiser sits on an endpoint, that endpoint is
+        pushed outward (doubling the window width, up to `lam_expand_max`
+        rounds) until the minimiser is interior.
+
+        `self.last_lambda_search` records the final bracket, whether the search
+        was still at a boundary when it stopped, and how many expansions were
+        used, so a boundary-limited bound can be detected instead of silently
+        accepted.
+        """
+        grid = tolcfg.LAMBDA_GRID if grid is None else grid
+        golden = tolcfg.LAMBDA_GOLDEN_ITERS if golden is None else golden
+        lo, hi = self.lam_log_range            # log10 lam
+        expansions, at_boundary = 0, False
+
+        for _ in range(self.lam_expand_max + 1):
+            ls = np.linspace(lo, hi, grid)
+            vals = [self._U(x_vec, L, XB) for L in ls]
+            k = int(np.argmin(vals))
+            if k == 0:                          # optimum pushed against lo
+                width = hi - lo
+                lo, hi = lo - width, ls[min(1, grid - 1)]
+                expansions += 1
+                at_boundary = True
+                continue
+            if k == grid - 1:                   # optimum pushed against hi
+                width = hi - lo
+                lo, hi = ls[max(grid - 2, 0)], hi + width
+                expansions += 1
+                at_boundary = True
+                continue
+            at_boundary = False
+            break
+
         a = ls[max(k - 1, 0)]
         b = ls[min(k + 1, grid - 1)]
         gr = (math.sqrt(5.0) - 1.0) / 2.0
         c_, d_ = b - gr * (b - a), a + gr * (b - a)
-        fc = 10.0 ** c_ * XB - self._dual_at(x_vec, 10.0 ** c_)[0]
-        fd = 10.0 ** d_ * XB - self._dual_at(x_vec, 10.0 ** d_)[0]
+        fc = self._U(x_vec, c_, XB)
+        fd = self._U(x_vec, d_, XB)
         for _ in range(golden):
             if fc < fd:
                 b, d_, fd = d_, c_, fc
                 c_ = b - gr * (b - a)
-                fc = 10.0 ** c_ * XB - self._dual_at(x_vec, 10.0 ** c_)[0]
+                fc = self._U(x_vec, c_, XB)
             else:
                 a, c_, fc = c_, d_, fd
                 d_ = a + gr * (b - a)
-                fd = 10.0 ** d_ * XB - self._dual_at(x_vec, 10.0 ** d_)[0]
-        lam = 10.0 ** (0.5 * (a + b))
-        return lam, lam * XB - self._dual_at(x_vec, lam)[0]
+                fd = self._U(x_vec, d_, XB)
+        log_lam = 0.5 * (a + b)
+        lam = 10.0 ** log_lam
+        self.last_lambda_search = {
+            "log10_lambda": float(log_lam),
+            "bracket": (float(lo), float(hi)),
+            "initial_bracket": tuple(float(v) for v in self.lam_log_range),
+            "expansions": expansions,
+            "at_boundary": bool(at_boundary),
+            "grid": grid, "golden_iters": golden,
+        }
+        return lam, self._U(x_vec, log_lam, XB)
 
     # -- best response -------------------------------------------------------
     def best_response(self, x_vec, XB, pool=1):
@@ -367,6 +598,16 @@ class PathOracle:
         LOWER bound on G) / ub (rigorous UPPER bound on G) / certified /
         n_evaluated, plus `pool`: up to `pool` near-binding paths, each of
         which yields an extra valid cut for the master problem.
+
+        `certified` here means the path-generation stopping rule fired, i.e.
+        no unexamined path can beat the incumbent to within
+        tolerances.CERT_SLACK.  It is a statement about the inner maximisation
+        over paths at this x, NOT about global optimality of x -- that is the
+        UB/LB gap reported by `solve_defender`.
+
+        In 'ksp' mode the result also carries `lambda_search`, the diagnostics
+        of the dual-multiplier search (final bracket, expansions used, and
+        whether the search terminated against a bracket boundary).
         """
         x_vec = np.asarray(x_vec, dtype=float)
         cands = []
@@ -385,6 +626,7 @@ class PathOracle:
             best["certified"] = True
             best["n_evaluated"] = len(self.paths)
             best["pool"] = cands
+            best["lambda_search"] = None
             return best
 
         # --- certified k-shortest-path generation
@@ -396,7 +638,7 @@ class PathOracle:
             cost = (sum(self.H[u][v]["w"] for u, v in zip(path[:-1], path[1:]))
                     + self._src_cost)          # source has no incoming edge
             bound_rest = lam * XB - cost       # bound for this and ALL later paths
-            if cands and bound_rest <= best_val + 1e-12:
+            if cands and bound_rest <= best_val + tolcfg.CERT_SLACK * 1e-3:
                 ub = best_val                  # certified: nothing left can beat it
                 break
             inter = path_interior(path, self.S, self.D, self.contest_endpoints)
@@ -410,9 +652,10 @@ class PathOracle:
         cands = cands[:max(pool, 1)]
         best = dict(cands[0])
         best["ub"] = min(ub, 0.0)
-        best["certified"] = bool(best["ub"] <= best["logval"] + 1e-9)
+        best["certified"] = bool(best["ub"] <= best["logval"] + tolcfg.CERT_SLACK)
         best["n_evaluated"] = k
         best["pool"] = cands
+        best["lambda_search"] = dict(self.last_lambda_search or {})
         return best
 
 
@@ -434,25 +677,119 @@ def game_value(G, S, D, x, XB, m=1.0, contest_endpoints=False, oracle=None,
 # ----------------------------------------------------------------------------
 
 
+def certificate(log_lb, log_ub, tol, iterations=None, n_cuts=None,
+                runtime=None, settings=None):
+    """Assemble the optimality-certificate record for one solve.
+
+    Everything a reader needs to check the claim, in one place:
+
+      log_ub / log_lb     the bracket in LOG space
+      value_ub / value_lb the same bracket on V* itself
+      abs_gap             log_ub - log_lb, clipped at 0 (see `abs_gap_raw`)
+      rel_gap             abs_gap / max(|log_ub|, 1); the denominator is stated
+                          explicitly because a relative gap is meaningless
+                          without it.  `rel_gap_value` is the corresponding
+                          multiplicative gap on V* itself, expm1(abs_gap),
+                          i.e. (V_ub - V_lb) / V_lb.
+      tolerance           the requested tolerance the gap is compared against
+      certified           True IFF abs_gap <= tolerance.  A result must not be
+                          described as certified when this is False.
+      status              "certified" or "not certified (gap > tolerance)"
+
+    The certificate is valid only because the upper and lower bounds refer to
+    the same optimization problem (same graph, budgets, m and node convention),
+    and it is stated net of the numerical tolerances in `tolerances.py`: the LP
+    lower bound is solved to LP_FEAS_TOL and the inner allocations to ROOT_TOL,
+    so a gap at or below those scales is at the resolution limit of the
+    arithmetic, not a sharper claim.
+    """
+    gap_raw = log_ub - log_lb
+    gap = max(gap_raw, 0.0)
+    ok = bool(gap <= tol)
+    rec = {"log_ub": float(log_ub), "log_lb": float(log_lb),
+           "value_ub": math.exp(log_ub), "value_lb": math.exp(log_lb),
+           "abs_gap": float(gap), "abs_gap_raw": float(gap_raw),
+           "rel_gap": float(gap / max(abs(log_ub), 1.0)),
+           "rel_gap_denominator": "max(|log_ub|, 1)",
+           "rel_gap_value": float(math.expm1(gap)),
+           "rel_gap_value_denominator": "V_lb  (so rel_gap_value = V_ub/V_lb - 1)",
+           "tolerance": float(tol),
+           "certified": ok,
+           "status": "certified" if ok else "not certified (gap > tolerance)"}
+    if iterations is not None:
+        rec["iterations"] = int(iterations)
+    if n_cuts is not None:
+        rec["n_cuts"] = int(n_cuts)
+    if runtime is not None:
+        rec["runtime_sec"] = float(runtime)
+    if settings:
+        rec["solver_settings"] = dict(settings)
+    return rec
+
+
+def sparsify_alloc(v, XA, rel):
+    """Zero out negligible components of an allocation and re-spend the budget.
+
+    Iterates are kept at x_i >= x_min for numerical safety (the subgradient
+    -1/(x_i + y_i) blows up as x_i -> 0), but x_min is NOT part of the model:
+    x_i = 0 is a legal allocation and convention (C1) gives p_i = 1 there.
+    Holding x_i >= x_min biases the UPPER bound upward by roughly
+    sqrt(x_min / t) per node that ought to be zero, so the solver also
+    evaluates these exactly-sparse points.  A reported optimum with x_i = 0 is
+    therefore the model's boundary solution, not an artefact of the floor.
+
+    Returns None when everything would be zeroed out.
+    """
+    v = np.asarray(v, dtype=float)
+    w = np.where(v < rel * XA, 0.0, v)
+    if w.sum() <= 0:
+        return None
+    return w * (XA / w.sum())
+
+
 def solve_defender(G, S, D, XA, XB, m=1.0, contest_endpoints=False,
-                   mode="auto", max_iter=200, tol=1e-7, x0=None,
+                   mode="auto", max_iter=200, tol=None, x0=None,
                    damping=True, pool=6, max_cuts=500, verbose=False,
                    oracle=None):
-    """Solve  V* = min_x max_{P,y} prod y_i/(x_i+y_i).
+    """Solve  V* = min_x max_{P,y} prod y_i^m/(x_i^m + y_i^m).
 
     Method
     ------
-    Work with G(x) = max_P g_P(x) (log space), which is convex (P2).
-    Iterate:
-        1. evader best response at x_k  -> exact g and a Danskin subgradient
+    Work with G(x) = max_P g_P(x) (log space), which is convex for 0 < m <= 1
+    (P2).  Iterate:
+        1. evader best response at x_k  -> value and a Danskin subgradient
         2. add the linear cut  theta >= g_k + s_k^T (x - x_k)
-        3. master LP  min{theta : cuts, sum x = XA, x >= xmin}  -> x_{k+1}, LB
+        3. master LP  min{theta : cuts, sum x = XA, x >= 0}  -> x_{k+1}, LB
         4. UB = best rigorous upper bound on G seen so far
-    Stop when UB - LB <= tol.  LB is always valid (cuts underestimate G, P4),
-    UB is always valid (exact enumeration, or the Lagrangian bound P5), so the
-    reported gap is a genuine optimality certificate.
+    Stop when UB - LB <= tol.  LB is always valid (cuts underestimate G, P4)
+    and UB is always valid (enumeration, or the Lagrangian bound P5), so the
+    reported gap is a genuine bracket on the optimum.
+
+    Certification
+    -------------
+    The result carries a global optimality certificate ONLY when that gap
+    closes within `tol`.  The returned dict always contains a `certificate`
+    sub-dict (see `certificate`) with UB, LB, absolute gap, relative gap and
+    its denominator, the requested tolerance, iteration and cut counts,
+    runtime, solver settings, and a `certified` flag / `status` string.  A run
+    that exits at `max_iter` with a nonzero gap is reported as NOT certified;
+    its value may still be accurate, but it is not proved optimal.
+
+    For 0 < m <= 1 the convexity result (P2) is what makes the LB valid.  For
+    m > 1 convexity provably fails, so cuts are no longer global
+    under-estimators: `certificate["convexity_proved"]` is False there and the
+    run is flagged exploratory / non-certified regardless of the gap.
     """
     t0 = time.time()
+    tol = tolcfg.GAP_TOL if tol is None else tol
+    convex_regime = bool(0.0 < m <= 1.0)
+    settings = {"mode": mode, "max_iter": max_iter, "tol": tol,
+                "damping": damping, "pool": pool, "max_cuts": max_cuts,
+                "m": m, "XA": XA, "XB": XB,
+                "contest_endpoints": contest_endpoints,
+                "lp_method": "highs", "lp_feas_tol": tolcfg.LP_FEAS_TOL,
+                "root_tol": tolcfg.ROOT_TOL,
+                "x_floor_rel": tolcfg.X_FLOOR_REL}
     if oracle is None:
         oracle = PathOracle(G, S, D, m=m, contest_endpoints=contest_endpoints,
                             mode=mode)
@@ -461,14 +798,22 @@ def solve_defender(G, S, D, XA, XB, m=1.0, contest_endpoints=False,
 
     if n == 0 or getattr(oracle, "trivial", False):
         # some S-D path has no contested node -> the evader gets through surely
+        cert = certificate(0.0, 0.0, tol, iterations=0, n_cuts=0,
+                           runtime=time.time() - t0, settings=settings)
+        cert["convexity_proved"] = convex_regime
+        cert["certified"] = bool(cert["certified"] and convex_regime)
+        cert["status"] = cert["status"] if convex_regime else \
+            "not certified (m > 1: convexity of the objective fails)"
         return {"x": {v: XA / max(n, 1) for v in nodes}, "log_lb": 0.0,
                 "log_ub": 0.0, "value": 1.0, "gap": 0.0, "iterations": 0,
                 "history": [], "nodes": nodes, "trivial": True,
                 "time": time.time() - t0, "oracle": oracle,
                 "best_path": oracle.paths[0] if oracle.paths else None,
-                "y": None, "certified": True}
+                "y": None, "certified": cert["certified"],
+                "certificate": cert, "n_cuts": 0, "residuals": {}}
 
-    xmin = max(1e-12, 1e-9 * XA / n)
+    # x_min is a NUMERICAL floor, not a model constraint (see `sparsify_alloc`).
+    xmin = max(tolcfg.X_FLOOR_ABS, tolcfg.X_FLOOR_REL * XA / n)
     x = (np.full(n, XA / n) if x0 is None else
          np.asarray([x0[v] for v in nodes], float))
     x = np.maximum(x, xmin)
@@ -478,24 +823,15 @@ def solve_defender(G, S, D, XA, XB, m=1.0, contest_endpoints=False,
     LB, UB = -np.inf, 0.0
     x_best, br_best = x.copy(), None
     history = []
-
-    def sparsify(v, rel):
-        """Zero out negligible components and re-spend the budget.
-
-        The iterates are kept at x_i >= xmin for numerical safety, which costs
-        the UPPER bound about sqrt(xmin/t) per node that should really be 0.
-        Evaluating the exactly-sparse point removes that bias: x_i = 0 is handled
-        by the p_i = 1 convention, with no 1/(x_i+y_i) blow-up.
-        """
-        w = np.where(v < rel * XA, 0.0, v)
-        if w.sum() <= 0:
-            return None
-        return w * (XA / w.sum())
+    lam_boundary_hits = 0
 
     def try_ub(xp):
         """Record xp as an incumbent if its (rigorous) value beats UB."""
-        nonlocal UB, x_best, br_best
+        nonlocal UB, x_best, br_best, lam_boundary_hits
         br = oracle.best_response(xp, XB, pool=pool)
+        ls = br.get("lambda_search")
+        if ls and ls.get("at_boundary"):
+            lam_boundary_hits += 1
         if br["ub"] < UB:
             UB, x_best, br_best = br["ub"], np.asarray(xp, float).copy(), br
         return br
@@ -503,9 +839,10 @@ def solve_defender(G, S, D, XA, XB, m=1.0, contest_endpoints=False,
     for it in range(1, max_iter + 1):
         pts = [x] if not damping or br_best is None else [x, 0.5 * (x + x_best)]
         # Sparsified probes improve the UPPER bound only.  They are never used
-        # to build cuts: at x_i = 0 the subgradient -1/(x_i+y_i) is unbounded.
+        # to build cuts: at x_i = 0 the subgradient -1/(x_i + y_i) is unbounded
+        # and Danskin's theorem is not being invoked there (see `cut_from`).
         for rel in (1e-6,):
-            sp = sparsify(x, rel)
+            sp = sparsify_alloc(x, XA, rel)
             if sp is not None and not np.allclose(sp, x):
                 try_ub(sp)
 
@@ -541,9 +878,9 @@ def solve_defender(G, S, D, XA, XB, m=1.0, contest_endpoints=False,
                       method="highs",
                       # cut slopes -1/(x_i+y_i) can reach ~1e4, so the default
                       # feasibility tolerances would leave ~1e-6 of slack in the
-                      # LOWER bound.  Tighten them.
-                      options={"primal_feasibility_tolerance": 1e-10,
-                               "dual_feasibility_tolerance": 1e-10})
+                      # LOWER bound.  Tighten them (tolerances.LP_FEAS_TOL).
+                      options={"primal_feasibility_tolerance": tolcfg.LP_FEAS_TOL,
+                               "dual_feasibility_tolerance": tolcfg.LP_FEAS_TOL})
         if not res.success:
             break
         LB = max(LB, float(res.x[-1]))
@@ -561,30 +898,85 @@ def solve_defender(G, S, D, XA, XB, m=1.0, contest_endpoints=False,
 
     # ---- final polish: try exactly-sparse versions of the incumbent --------
     for rel in (1e-9, 1e-7, 1e-5, 1e-4, 1e-3):
-        sp = sparsify(x_best, rel)
+        sp = sparsify_alloc(x_best, XA, rel)
         if sp is not None:
             try_ub(sp)
 
     # The LOWER bound comes from an LP solved to a finite tolerance while the
-    # UPPER bound is an exact evaluation, so UB - LB can come out very slightly
-    # negative once both agree to ~1e-9.  Report that honestly rather than
-    # pretending the bracket is exact.
+    # UPPER bound is a direct evaluation, so UB - LB can come out very slightly
+    # negative once both agree to ~1e-9.  Report that honestly (gap_raw) rather
+    # than pretending the bracket is exact.
     gap_raw = UB - LB
     LB_rep = min(LB, UB)
 
     br_fin = oracle.best_response(x_best, XB)
+    runtime = time.time() - t0
+
+    cert = certificate(LB_rep, UB, tol, iterations=len(history),
+                       n_cuts=len(A_ub), runtime=runtime, settings=settings)
+    cert["abs_gap_raw"] = float(gap_raw)
+    cert["convexity_proved"] = convex_regime
+    cert["path_oracle_certified"] = bool(br_fin["certified"])
+    cert["lambda_boundary_hits"] = lam_boundary_hits
+    if not convex_regime:
+        # Convexity provably fails for m > 1 (FORMULATION.md S3, Prop. 5), so
+        # the cuts are not global under-estimators and LB is not a valid bound.
+        # Such runs are exploratory, never certified.
+        cert["certified"] = False
+        cert["status"] = ("not certified (m > 1: convexity of the objective "
+                          "provably fails, so the lower bound is not valid)")
+    elif lam_boundary_hits:
+        cert["status"] += " [dual search hit a bracket boundary]"
+
+    # ---- residual checks (audit trail, not a claim) ------------------------
+    y_fin = np.asarray(br_fin["y"], float)
+    x_fin_path = oracle._sub(x_best, br_fin["interior"])
+    lam_fin = br_fin.get("lam", np.inf)
+    t_fin = 1.0 / lam_fin if np.isfinite(lam_fin) and lam_fin > 0 else 0.0
+    resid = alloc_residuals(x_fin_path, {"y": y_fin, "t": t_fin}, XB, m)
+    resid["defender_budget_abs"] = float(abs(x_best.sum() - XA))
+    resid["certificate_abs_gap"] = float(max(gap_raw, 0.0))
+    resid["path_cost_consistency"] = _path_cost_consistency(oracle, x_best, XB)
+    cert["residuals"] = resid
+
     return {"x": oracle.to_dict(x_best), "x_vec": x_best,
             "log_lb": LB_rep, "log_lb_raw": LB, "log_ub": UB,
             "value": math.exp(UB),
             "value_lb": math.exp(LB_rep), "gap": max(gap_raw, 0.0),
             "gap_raw": gap_raw,
             "rel_gap": math.expm1(max(gap_raw, 0.0)), "iterations": len(history),
+            "n_cuts": len(A_ub), "tolerance": tol,
             "history": history, "nodes": nodes, "trivial": False,
             "best_path": br_fin["path"],
             "y": {v: float(yy) for v, yy in zip(br_fin["interior"], br_fin["y"])},
-            "certified": br_fin["certified"], "time": time.time() - t0,
+            "certified": cert["certified"], "certificate": cert,
+            "residuals": resid,
+            "path_oracle_certified": bool(br_fin["certified"]),
+            "time": runtime,
             "oracle": oracle, "n_paths": oracle.n_paths_known,
             "paths_complete": oracle.paths_complete}
+
+
+def _path_cost_consistency(oracle, x_vec, XB):
+    """Check the dual relaxation's shortest-path step against direct evaluation.
+
+    For the multiplier lambda chosen by the dual search, the Dijkstra path cost
+    must equal the sum of the node costs c_i(lambda) = -psi(x_i, lambda) along
+    the returned path (plus the source term when endpoints are contested).
+    Any mismatch would mean the shortest-path reduction and the node/path
+    convention have drifted apart.  Returns the absolute discrepancy, or None
+    when the oracle is in enumeration mode and never builds the relaxation.
+    """
+    if oracle.mode != "ksp":
+        return None
+    try:
+        lam, _ = oracle._best_lambda(x_vec, XB)
+        length, path = oracle._dual_at(x_vec, lam)
+        inter = path_interior(path, oracle.S, oracle.D, oracle.contest_endpoints)
+        direct = float(-psi(oracle._sub(x_vec, inter), lam, oracle.m).sum())
+        return float(abs(length - direct))
+    except Exception:                                   # pragma: no cover
+        return None
 
 
 # ----------------------------------------------------------------------------
@@ -642,7 +1034,7 @@ def heuristic_allocation(G, S, D, XA, kind="uniform", XB=None, m=1.0,
     elif kind == "greedy":
         # myopic: repeatedly give a budget slice to the most valuable node of
         # the CURRENT worst-case path (largest |dg/dx_i| = 1/(x_i+y_i))
-        x = np.full(n, 1e-9 * XA / n)
+        x = np.full(n, tolcfg.X_FLOOR_REL * XA / n)
         inc = XA / steps
         for _ in range(steps):
             br = oracle.best_response(x, XB)
@@ -660,7 +1052,7 @@ def heuristic_allocation(G, S, D, XA, kind="uniform", XB=None, m=1.0,
     if w.sum() <= 0:
         w = np.ones(n)
     x = XA * w / w.sum()
-    x = np.maximum(x, 1e-12 * XA / n)
+    x = np.maximum(x, tolcfg.X_FLOOR_ABS * XA / n)
     x *= XA / x.sum()
     return oracle.to_dict(x)
 
@@ -682,7 +1074,8 @@ def brute_force_grid(G, S, D, XA, XB, m=1.0, steps=40, contest_endpoints=False,
         nonlocal best
         if i == n - 1:
             alloc = acc + [left]
-            x = np.maximum(np.array(alloc, float) * XA / steps, 1e-12)
+            x = np.maximum(np.array(alloc, float) * XA / steps,
+                           tolcfg.X_FLOOR_ABS)
             v = oracle.best_response(x, XB)["logval"]
             if v < best[0]:
                 best = (v, x.copy())

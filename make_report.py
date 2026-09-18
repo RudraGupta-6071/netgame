@@ -32,7 +32,7 @@ def tbl(name, caption, cols=None, limit=None):
     p = os.path.join(OUT, name)
     if not os.path.exists(p):
         return f"<p class='missing'>[missing table: {name}]</p>"
-    with open(p) as fh:
+    with open(p, encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     if not rows:
         return ""
@@ -121,7 +121,11 @@ BODY = f"""
 
 <h1>Optimal defence of a network against a budgeted path-evader</h1>
 <p class="sub">A Tullock path-contest game on a directed graph: formulation,
-a convexity theorem, a certified cutting-plane algorithm, and a numerical study.</p>
+a convexity theorem, a cutting-plane algorithm with an optimality certificate,
+and a numerical study. The method provides a global optimality certificate when
+the computed upper and lower bounds close within the stated tolerance; every
+table below reports those bounds, the gaps, the tolerance and the resulting
+certificate status.</p>
 
 <div class="toc">
 <strong>Contents</strong>
@@ -178,8 +182,8 @@ allocation resolves.</p>
 <p>The problem looks like a hard nonconvex minimax over an exponential strategy
 space. It is not. In log space the defender's objective is <strong>convex</strong>,
 so the global optimum is computable with a certificate; and the evader's path
-choice can be settled by a shortest-path oracle that <em>proves</em> optimality
-after examining a handful of paths. On a graph with 16.8&nbsp;million
+choice can be settled by a shortest-path oracle that <em>certifies</em> it has
+the best path after examining a handful of paths. On a graph with 16.8&nbsp;million
 <code>S–D</code> paths, the oracle evaluates <strong>two</strong> of them and
 recovers the known closed-form value to machine precision in a few seconds.
 On that widest instance the <em>outer</em> cutting-plane certificate does not
@@ -214,7 +218,8 @@ lower bound is computed over <code>x &ge; 0</code>.</p>
 <p>The general ratio form <code>p<sub>i</sub> = y<sub>i</sub><sup>m</sup>/(x<sub>i</sub><sup>m</sup>
 + y<sub>i</sub><sup>m</sup>)</code> with <em>contest intensity</em> <code>m</code>
 is implemented throughout; <code>m = 1</code> is the case in the problem
-statement. Section 13 explains why <code>m &le; 1</code> is the certified regime.</p>
+statement. Section 13 explains why <code>0 &lt; m &le; 1</code> is the
+certifiable regime, and why <code>m &gt; 1</code> results are exploratory.</p>
 
 <h2 id="inner">3. The evader's split on a fixed path</h2>
 
@@ -269,8 +274,13 @@ supremum of convex functions, hence convex; and
 convex functions. &#8718;</p>
 
 <p>This is the difference between a method that finds <em>a</em> stationary point
-and one that <em>proves</em> it has the optimum. It also yields the subgradient,
-by Danskin's theorem: at the inner optimum,
+and one that can <em>certify</em> it has the optimum, whenever its bounds close.
+Note that this is convexity, not strict convexity: <code>g<sub>P</sub></code>
+ignores the coordinates off <code>P</code>, so <code>G</code> is flat in those
+directions and uniqueness of the minimiser does not follow. It also yields the
+subgradient, by Danskin's theorem &mdash; where the inner maximiser is unique
+and interior, and <code>x<sub>i</sub> &gt; 0</code>, the objective being
+nonsmooth at the boundary. At the inner optimum,
 <code>&part;g<sub>P</sub>/&part;x<sub>i</sub> = &minus;1/(x<sub>i</sub> +
 y*<sub>i</sub>)</code> on the active path and <code>0</code> elsewhere — matched
 against central differences to <code>2e&minus;9</code>.</p>
@@ -325,15 +335,17 @@ functions), so golden-section search on <code>log &lambda;</code> finds it.</p>
 <code>c<sub>&lambda;</sub>(P&prime;) &ge; c<sub>&lambda;</sub>(P<sub>k</sub>)</code>,
 so all of them are bounded by
 <code>&lambda;x̄<sub>B</sub> &minus; c<sub>&lambda;</sub>(P<sub>k</sub>)</code>.
-As soon as that drops below the best exact value found, the search stops
-<em>with a proof</em> that no unexamined path can win.</p>
+As soon as that drops below the best value found so far, the search stops
+<em>with a certificate</em> that no unexamined path can win.</p>
 
 <p>Against exhaustive enumeration on 80 trials the oracle returns the true best
-response every time, always certified, touching on average <strong>2.0 of
-15.7</strong> paths. Finding the single best path is NP-hard in general (Nguyen,
-Song &amp; Smith prove it for the analogous maximum-reliability path), which is
-why certified <em>generation</em>, not a polynomial algorithm, is the right
-target.</p>
+response every time, with the stopping rule firing on every trial, touching on
+average <strong>2.0 of 15.7</strong> paths. The path-selection subproblem is
+closely related to maximum-reliability path problems known to be NP-hard: Nguyen,
+Song &amp; Smith prove NP-hardness for the <em>analogous</em> problem in their
+discrete setting, which is not a proof that the continuous model here is
+NP-hard, and none is claimed. Consequently certified path <em>generation</em>,
+rather than a polynomial-time exact oracle, is the right target.</p>
 
 <h2 id="cp">6. The cutting-plane algorithm</h2>
 
@@ -347,7 +359,7 @@ gives a weaker but still valid cut), and the cuts hold on all of
 
 <pre><code>x &lt;- uniform
 repeat
-    evade : best response at x (and at the damped midpoint)  -&gt; exact value, cuts
+    evade : best response at x (and at the damped midpoint)  -&gt; value, cuts
     UB    &lt;- min over every point evaluated so far                  (rigorous)
     add cuts (best response plus a pool of near-binding paths)
     master LP:  min theta  s.t.  theta &gt;= s_k'x + b_k,
@@ -434,17 +446,26 @@ the solver.</p>
 
 <ul>
 <li><strong>Inner problem</strong> — KKT beats 240k random feasible splits;
-multipliers equal to <code>8e&minus;16</code>; budget exact to <code>4e&minus;16</code>.</li>
+multipliers equal to <code>8e&minus;16</code>; budget residual
+<code>4e&minus;16</code>.</li>
 <li><strong>Lagrangian bound</strong> — valid for every <code>&lambda;</code>, tight
 at <code>&lambda;*</code> to <code>4e&minus;15</code>.</li>
 <li><strong>Danskin subgradient</strong> — matches central differences to
 <code>2e&minus;9</code>.</li>
-<li><strong>Convexity</strong> — 0 violations in 160 random chords at
-<code>m = 1</code>; explicit counterexample at <code>m = 2</code>.</li>
+<li><strong>Convexity</strong> — 0 violations found in 160 sampled
+chords at <code>m = 1</code>. Sampling cannot prove convexity: this
+<em>numerically validates convexity on the sampled instances</em> and
+sanity-checks the theorem, which rests on its proof. The
+<code>m = 2</code> counterexample is different in kind — a single
+explicit violation does settle the negative claim.</li>
 <li><strong>Closed forms</strong> — worst absolute deviation
-<strong>8.9e&minus;10</strong> across all four families.</li>
-<li><strong>Path oracle</strong> — reproduces exhaustive enumeration on 80 trials,
-always certified.</li>
+<strong>5.6e&minus;12</strong> across all four families, with the certificate
+closing on all 20 benchmark runs.</li>
+<li><strong>Path oracle</strong> — reproduces exhaustive enumeration on 80
+trials, with the stopping rule certifying every one.</li>
+<li><strong>Residuals</strong> — evader budget, KKT/stationarity, root
+equation, certificate gap and shortest-path cost consistency, all checked
+against the shared tolerances in <code>tolerances.py</code>.</li>
 <li><strong>Brute force</strong> — grid search never beats the solver; its residual
 shrinks monotonically as the grid is refined, confirming the difference is
 discretisation error.</li>
@@ -466,8 +487,8 @@ both budgets exactly exhausted.</li>
 with a cross link <code>i1&rarr;j1</code> that makes the branches non-disjoint.
 With <code>x̄<sub>A</sub> = x̄<sub>B</sub> = 10</code>:</p>
 
-<pre><code>x*[i1] = 1.513885   x*[i2] = 1.513885   x*[j1] = 6.972244
-V*     = 0.589197293      certified gap 0.0
+<pre><code>x*[i1] = 1.513878   x*[i2] = 1.513878   x*[j1] = 6.972244
+V*     = 0.589197293      abs gap 1.6e-13, tol 1e-12  -&gt; CERTIFIED
 evader best response: S -&gt; i1 -&gt; i2 -&gt; D,  y* = (5.0, 5.0)</code></pre>
 
 <p>This can be checked by hand. Two paths are active and equalised; writing
@@ -476,7 +497,7 @@ evader best response: S -&gt; i1 -&gt; i2 -&gt; D,  y* = (5.0, 5.0)</code></pre>
 <code>(5/(a+5))&sup2;</code> and <code>10/(20&minus;2a)</code> reduces to
 <code>a&sup2; + 15a &minus; 25 = 0</code>, so
 <code>a = (&minus;15 + &radic;325)/2 = 1.5139</code> and
-<code>V* = 5/8.4861 = 0.58920</code>. Exact agreement. The third path
+<code>V* = 5/8.4861 = 0.58920</code>, which the solver reproduces. The third path
 <code>S&rarr;i1&rarr;j1&rarr;D</code> is slack at <code>0.3369</code>.</p>
 
 <p>Note what the baselines do here. <code>betweenness</code> centrality puts the
@@ -492,10 +513,13 @@ centrality heuristic is not merely suboptimal; it is catastrophic.</p>
 <h3>9.2 Topology study</h3>
 
 {tbl("E3_topologies.csv",
-     "Table 2 — certified optima across the topology catalogue, with the excess "
-     "evader success of each baseline. 0% means the baseline happens to be "
-     "optimal; higher is worse for the defender.",
-     ["graph","nodes","edges","contested","paths","V_star","gap","iters","sec",
+     "Table 2 — optima across the topology catalogue with their "
+     "certificates, and the excess success probability of each baseline, "
+     "100*(V_heuristic/V* - 1). 0% means the baseline happens to match the "
+     "optimum; higher is worse for the defender. A row with certified=no is "
+     "an accurate value, not a proved optimum.",
+     ["graph","nodes","edges","contested","paths","V_star","abs_gap","rel_gap",
+      "tol","certified","iters","cuts","sec",
       "uniform","mincut","pathcount","betweenness","greedy"])}
 
 {img("E3_allocations.png",
@@ -519,10 +543,15 @@ centrality heuristic is not merely suboptimal; it is catastrophic.</p>
 <h3>9.4 Convergence of the certificate</h3>
 
 {img("E6_convergence.png",
-     "Figure 5 — upper and lower bounds converging, and the log-gap closing to "
-     "1e-11. The bound is genuinely certified rather than merely stationary.")}
+     "Figure 5 — upper and lower bounds converging, and the log-gap "
+     "closing. The bracket is rigorous rather than merely stationary; it "
+     "becomes a certificate once the gap falls within the requested "
+     "tolerance.")}
 
-{tbl("E6_convergence.csv", "Table 3 — convergence summary.")}
+{tbl("E6_convergence.csv",
+     "Table 3 — convergence summary with the full certificate record: "
+     "UB, LB, absolute and relative gap, tolerance, status, iterations, cuts "
+     "and runtime.")}
 
 <h3>9.5 Contest intensity</h3>
 
@@ -545,19 +574,26 @@ the defender must spread while the attacker focuses.</p>
 
 <h2 id="heur">10. Comparison with heuristic defences</h2>
 
-<p>Five defender rules are evaluated <em>exactly</em> against the certified
-optimum on 20 random DAGs: uniform spreading, minimum vertex cut, allocation
-proportional to path count, betweenness centrality, and a greedy marginal-value
-rule.</p>
+<p>Five defender rules are evaluated against the optimum on 20 random DAGs
+(all 20 certified at tolerance 1e-9): uniform spreading, minimum vertex cut,
+allocation proportional to path count, betweenness centrality, and a greedy
+marginal-value rule. The metric is the <em>excess success probability</em></p>
+
+<pre><code>excess success probability (%) = 100 * (V_heuristic / V* - 1)</code></pre>
+
+<p>a ratio minus one, not an absolute difference and not a difference of
+percentage points, so &ldquo;+211%&rdquo; means the evader succeeds 3.11&times;
+as often. <code>V*</code> is taken as the upper bound, so the figures are
+conservative.</p>
 
 {tbl("E5_baseline_summary.csv",
-     "Table 4 — excess evader success probability relative to the certified "
-     "optimum, over 20 random DAGs.")}
+     "Table 4 — excess success probability, 100*(V_heuristic/V* - 1), "
+     "relative to the optimum, over 20 random DAGs (all certified).")}
 
 {img("E5_baselines.png",
-     "Figure 7 — distribution of the excess. Only the greedy marginal rule is "
-     "in the right neighbourhood, and it is still 10% worse on average and 43% "
-     "worse at its worst.")}
+     "Figure 7 — distribution of the excess success probability. The "
+     "greedy marginal rule is the only one in the right neighbourhood, and it "
+     "still gives the evader 10.3% more success on average, 42.5% at worst.")}
 
 <p>Three things stand out.</p>
 
@@ -567,12 +603,13 @@ the regular grid, the parallel chains and the complete layered graph it scores
 resource allocation is optimal under homogeneous component vulnerability —
 recovered here as a <em>theorem</em> (the symmetry argument of §7) rather than an
 empirical observation. It is also the boundary of that finding: the moment the
-topology is irregular, uniform is <strong>211% worse on average</strong>.</p>
+topology is irregular, uniform gives the evader <strong>211.0% more success on
+average</strong>.</p>
 
 <p><strong>Min-cut intuition is not enough.</strong> The optimal support must be a
 vertex cut — if any path is left wholly undefended the value is 1. But the
-converse fails badly: concentrating everything on a <em>minimum</em> cut averages
-221% worse and reaches 579%. On a 4-chain the minimum node cut is a single node,
+converse fails badly: concentrating everything on a <em>minimum</em> cut raises
+the evader's success by 220.9% on average and up to 578.7%. On a 4-chain the minimum node cut is a single node,
 and defending only it is <strong>700% worse</strong> than spreading evenly. The
 covering condition is necessary, not sufficient.</p>
 
@@ -582,31 +619,53 @@ covering condition is necessary, not sufficient.</p>
 <h2 id="perf">11. Computational performance</h2>
 
 {tbl("E7_scaling.csv",
-     "Table 5 — layered instances. The strategy space grows to 1.7e7 paths; the "
-     "oracle evaluates two of them and the value stays exact to machine "
-     "precision.",
+     "Table 5 — observed behaviour on the tested layered family. The "
+     "strategy space grows to 1.7e7 paths; the oracle evaluated two of them "
+     "and the value matched the closed form to machine precision. The "
+     "certified column shows where the outer bracket actually closed. "
+     "Measured on the graph family and sizes listed, not a complexity result.",
      ["graph","nodes","contested","paths","V_star","closed_form","abs_err",
-      "paths_touched","iters","sec"])}
+      "paths_touched","abs_gap","tol","certified","iters","sec"])}
 
 {img("E7_scaling.png",
-     "Figure 8 — runtime is essentially flat in the path count, and the number "
-     "of paths actually evaluated stays at 2 while full enumeration grows "
-     "exponentially.")}
+     "Figure 8 — on this tested family, runtime stayed essentially flat "
+     "in the path count and the number of paths actually evaluated stayed at 2 "
+     "while full enumeration grows exponentially. Observed performance at "
+     "these instance sizes, not a general scaling law.")}
 
 {tbl("E7_random_scaling.csv",
-     "Table 6 — random DAGs, mean of 3 seeds. Growth is driven by the number of "
-     "contested nodes, i.e. the dimension of the master LP, not by path count.")}
+     "Table 6 — random DAGs, mean of 3 seeds (100, 101, 102). On these "
+     "instances growth tracked the number of contested nodes, i.e. the "
+     "dimension of the master LP, rather than the path count.")}
 
 <div class="box warn">
 <h4>An honest reading of Table 5</h4>
-<p>The <code>V_star</code> column — the upper bound — is exact to machine
-precision on every instance. The <code>gap</code> column is the residual
-<em>certificate</em>, and on the widest instances (48–50 contested nodes) it has
-not closed within the 200-iteration cap: roughly <code>2e&minus;3</code> of
-log-gap remains. Those rows are correctly described as "exact value, gap not
-yet certified", not "proved optimal". Kelley's method is known to converge
-slowly in higher dimension; a proximal-bundle or level-set master would fix it.</p>
+<p>The <code>V_star</code> column — the upper bound — matches the
+closed form to machine precision on every instance. The <code>abs_gap</code>
+column is the residual <em>certificate</em>, and on the widest instances
+(48–50 contested nodes) it has not closed within the 200-iteration cap:
+roughly <code>2e&minus;3</code> of log-gap remains, and those rows read
+<code>certified=no</code>. They are correctly described as "accurate value, gap
+not closed", <em>not</em> "proved optimal". Of the 13 layered instances the
+certificate closed on 5. Kelley's method is known to converge slowly in higher
+dimension; a proximal-bundle or level-set master would fix it.</p>
+<p>The runtime and paths-evaluated figures describe this graph family at these
+sizes on the hardware recorded in <code>out/RUN_METADATA.json</code>. They are
+observed performance, not a theoretical complexity claim, and they do not
+generalise to arbitrary graphs.</p>
 </div>
+
+<h3>11.1 Reproducibility</h3>
+
+<p>Every experiment run writes <code>out/RUN_METADATA.json</code>, recording the
+random seeds, the Python and package versions, the repository commit and
+whether the working tree was clean, the platform and CPU, the runtime
+methodology, and the complete tolerance configuration from
+<code>tolerances.py</code>. The numerical results are seeded and regenerate
+exactly; measured wall-clock times depend on hardware and system load and do
+not. That record is what makes the certificate claims above checkable: a gap of
+<code>1e&minus;11</code> means nothing without the tolerances the bounds were
+computed to.</p>
 
 <h2 id="disc">12. Discussion</h2>
 
@@ -633,18 +692,19 @@ second stage is <em>simultaneous</em>, so it needs mixed strategies and an LP ov
 path distributions; the Stackelberg structure here yields a <em>pure</em> optimal
 defence. And where they must approximate <code>exp(z) &asymp; 1 + z</code> to
 linearise their product, the log transform here is exact, because the payoff is
-a pure product with no additive terms. Their NP-hardness result for the
-maximum-reliability path is what justifies aiming at certified generation rather
-than a polynomial oracle.</p>
+a pure product with no additive terms. Their NP-hardness result is proved for
+the maximum-reliability path problem in their setting; it motivates aiming at
+certified generation rather than a polynomial oracle, and it is not evidence
+about the complexity of the continuous model studied here.</p>
 
 <p>Ramirez-Marquez, Rocco &amp; Levitin are the closer match on primitives —
 their vulnerability <code>T<sup>m</sup>/(T<sup>m</sup>+t<sup>m</sup>)</code> is
 exactly this contest function with continuous defence resources. They fix the
 attacker to a handful of named scenarios and solve with an evolutionary
 algorithm carrying no optimality bound; the convexity theorem lets that be
-replaced by a certified convex method against a fully optimising evader. Their
-headline empirical finding is reproduced as a theorem and its boundary made
-precise. Their contest-intensity discussion is what §9.5 measures, and the
+replaced by a convex method that can certify its output against a fully
+optimising evader. Their headline empirical finding has a counterpart that we
+derive as a theorem for this model, with its boundary made precise. Their contest-intensity discussion is what §9.5 measures, and the
 non-convexity at <code>m &gt; 1</code> is the precise reason a metaheuristic was
 the reasonable choice in that regime — the same non-convexity Kovenock and
 Roberson invoke when arguing that series/parallel contest games can require
@@ -654,20 +714,37 @@ mixed strategies.</p>
 
 <ol>
 <li><strong><code>m &gt; 1</code> carries no guarantee.</strong> Convexity provably
-fails, with an explicit counterexample. The solver runs and the numbers look
-sensible, but they are labelled <code>NOT PROVEN</code> in the output.</li>
+fails, with an explicit counterexample, so the lower bound is not valid and no
+gap certifies anything there. The solver runs and the numbers look sensible,
+but those rows are labelled <code>EXPLORATORY / NON-CERTIFIED</code> in the
+output and carry <code>convexity_proved = false</code>.</li>
 <li><strong>Stackelberg, not simultaneous.</strong> A commits first and B observes
 <code>x</code>. Under simultaneous play a pure equilibrium may fail to exist and
 mixed strategies over paths would be needed — the Nguyen–Song–Smith setting, and
 the natural next step.</li>
 <li><strong>The certificate does not always close</strong> within the iteration cap
-on the widest instances, as Table 5 shows.</li>
+on the widest instances, as Table 5 shows; those runs report
+<code>certified=no</code> and are not proved optima.</li>
 <li><strong>Independence across nodes</strong> is assumed; the payoff is a product.
 Real detection events along a route are usually correlated.</li>
 <li><strong>Node contests only.</strong> Arc contests would be a relabelling — split
 each arc into a node — but are not implemented.</li>
 <li><strong>The path oracle is certified but not polynomial.</strong> Worst case it
-degrades to enumeration; the underlying problem is NP-hard.</li>
+degrades to enumeration. The path-selection subproblem is closely related to
+maximum-reliability path problems known to be NP-hard; NP-hardness of the exact
+continuous model here is neither proved nor claimed.</li>
+<li><strong>Convexity is not strict convexity.</strong> The objective is convex
+for <code>0 &lt; m &le; 1</code> under the stated model. This does not, by
+itself, imply strict convexity or uniqueness of the global minimizer; an
+earlier claim of uniqueness was retracted.</li>
+<li><strong>No novelty claim is made.</strong> No "first", "only" or "no prior
+work" statement appears in this project; a keyword literature search is not a
+systematic review.</li>
+<li><strong>Numerical results are numerical.</strong> The evader allocation is
+solved to tolerance and rescaled rather than symbolically; certificates are
+stated net of the tolerances in <code>tolerances.py</code>; randomised checks
+validate the implementation on sampled instances rather than proving the
+statements they check.</li>
 </ol>
 
 <h2 id="conc">14. Conclusion</h2>
@@ -681,13 +758,15 @@ solver that matches four independent closed-form families to
 <code>8.9e&minus;10</code> and handles graphs with tens of millions of paths in
 seconds.</p>
 
-<p>The substantive finding is that <strong>the number of paths is the wrong measure
-of difficulty, and the wrong guide to defence</strong>. What matters is the width
-and depth of the cuts the evader must cross. Uniform allocation is provably
-optimal on symmetric topologies and 211% worse off them; minimum-cut defence,
-despite the covering condition being necessary, is 221% worse on average and
-700% worse on a plain chain. Getting the allocation right requires equalising
-the evader's best options, which is exactly what the certified optimum does.</p>
+<p>The substantive finding, on the families studied here, is that <strong>the
+number of paths is a poor measure of difficulty and a poor guide to
+defence</strong>. What matters is the width and depth of the cuts the evader
+must cross. Uniform allocation is provably optimal on the symmetric topologies
+covered by the derivations above, and off them it gives the evader 211.0% more
+success on average; minimum-cut defence, despite the covering condition being
+necessary, gives 220.9% more on average and 700% more on a plain chain. Getting
+the allocation right requires equalising the evader's best options, which is
+what the optimum does.</p>
 
 <h2 id="refs">15. References</h2>
 
@@ -734,7 +813,7 @@ def main():
            "</title><style>" + CSS + "</style></head><body>" + BODY +
            "</body></html>")
     path = os.path.join(OUT, "REPORT.html")
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write(doc)
     print(f"wrote {path}  ({len(doc)/1e6:.2f} MB)")
     return 0

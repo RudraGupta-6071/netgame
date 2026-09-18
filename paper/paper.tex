@@ -69,8 +69,9 @@ We prove that, written in logarithmic coordinates, the defender's problem
 is convex whenever $m \le 1$, which makes the game solvable to a certified
 global optimum rather than to a stationary point. We show by explicit
 counterexample that convexity fails for $m>1$, so the guarantee cannot be
-extended by a sharper argument alone. Finding the evader's best route is,
-in general, an NP-hard problem; we avoid solving it directly by a
+extended by a sharper argument alone. Finding the evader's best route is
+closely related to maximum-reliability path problems known to be NP-hard;
+we therefore avoid solving it directly by a
 Lagrangian relaxation that turns "find the worst route among possibly
 millions" into a single shortest-path computation, together with a rule
 that proves when no unexamined route can be better. The defender's
@@ -78,17 +79,22 @@ allocation problem is then solved with a cutting-plane method that
 produces a two-sided optimality certificate.
 
 We validate the method against four independently derived closed-form
-solutions, matching them to within $5.6\times10^{-12}$, and pass 36
+solutions, matching them to within $5.6\times10^{-12}$, and pass 64
 automated checks spanning analytical benchmarks, exhaustive enumeration,
-brute-force search, and randomised sampling. On a graph with
-$1.68\times10^{7}$ possible routes, the route oracle recovers the known
-closed-form value while evaluating only two of those routes, although on
-the widest instances the outer cutting-plane certificate does not close
-within our iteration limit. We also show that uniform allocation of the
-budget -- reported as empirically good in earlier reliability studies --
-is exactly optimal for the symmetric graph families we analyse, but
-$211\%$ worse than optimal on average over 20 irregular graphs, and that
-a "defend the most central node" rule can fail completely.
+brute-force search, randomised sampling, residual audits and
+certificate reporting. On a tested graph with $1.68\times10^{7}$ possible
+routes, the route oracle recovered the known closed-form value while
+evaluating only two of those routes, although on the widest instances the
+outer cutting-plane certificate does not close within our iteration limit
+and those results are therefore reported as accurate values that are not
+proved optimal. These are observed measurements on the graph families and
+instance sizes tested, not general complexity claims. We also show that
+uniform allocation of the budget -- reported as empirically good in
+earlier reliability studies -- is optimal for the symmetric graph families
+we analyse, but raises the evader's success probability by $211\%$ on
+average over 20 irregular graphs (that is,
+$100(V_{\mathrm{heuristic}}/V^{\star}-1)$, a ratio minus one), and that a
+"defend the most central node" rule can fail completely.
 
 \medskip\noindent
 \textbf{Keywords:} network interdiction; Tullock contest; Stackelberg
@@ -163,10 +169,14 @@ correct.
   just a proof artefact.
 
 \item \textbf{An algorithm that avoids enumerating routes.} Finding the
-  evader's best route is a maximum-reliability path problem, shown
-  NP-hard by \citet{nguyen2023}. We give a relaxation that reduces this
-  search to one shortest-path computation, plus a rule that certifies when
-  no unexamined route can beat the current best
+  evader's best route is a maximum-reliability path problem;
+  \citet{nguyen2023} prove NP-hardness for the analogous problem in their
+  discrete setting. That result does not by itself establish NP-hardness of
+  the continuous model studied here, and we claim no such reduction;
+  consequently we use a certified route-generation procedure rather than
+  claim a polynomial-time exact oracle. We give a relaxation that reduces
+  this search to one shortest-path computation, plus a rule that certifies
+  when no unexamined route can beat the current best
   (Section~\ref{sec:oracle}).
 
 \item \textbf{Closed-form checks and a tested implementation.} We derive
@@ -206,8 +216,10 @@ over paths is the discrete analogue of our cutting planes
 (Section~\ref{sec:methods-cutting}), and their trick of turning a product
 of survival probabilities into a shortest-path problem via logarithms is
 the discrete version of our Lagrangian oracle
-(Section~\ref{sec:oracle}). Their proof that the underlying path problem
-is NP-hard is why we do not look for a polynomial exact algorithm.
+(Section~\ref{sec:oracle}). Their proof that the underlying path problem in their setting
+is NP-hard is why we do not look for a polynomial exact algorithm here; it
+is a result about an analogous problem, not about the continuous model of
+Section~\ref{sec:methods-model}.
 
 \paragraph{Contest-based models of protection.}
 \citet{ramirez2011} use a contest success function of the same ratio-form
