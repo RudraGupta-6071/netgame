@@ -32,7 +32,7 @@ python run_all.py                               # validation + all experiments (
 Or piecemeal:
 
 ```bash
-python tests.py                 # 64 validation checks
+python tests.py                 # 80 validation checks
 python experiments.py           # all experiments
 python experiments.py E2 E7     # just the worked example and the scaling study
 python repro.py                 # print the reproducibility metadata record
@@ -78,7 +78,17 @@ is valid.
 **The objective is convex for `0 < m ≤ 1` under the stated model. This does not,
 by itself, imply strict convexity or uniqueness of the global minimizer** — a
 path objective `g_P` does not depend on the defence variables of nodes off `P`,
-so `G` is flat in those directions. See `FORMULATION.md` §3.1.
+so `G` is flat in those directions.
+
+Uniqueness nevertheless **holds**, and is now proved (`FORMULATION.md` §3.1) by
+a different route: *Lemma 2* shows that at an optimum every node carrying budget
+lies on an active path (empty a node that does not, spread the freed budget over
+every other relevant node, and every active path strictly improves), and
+*Proposition 4c* then needs strict convexity only along one active path through
+one coordinate where two candidate optima differ. This supersedes an earlier,
+**wrong** uniqueness proof that this repo retracted; the retraction is kept in
+§3.1, and so is a warning that a proof is exactly the thing the test suite
+cannot verify.
 
 Three layers:
 
@@ -115,7 +125,7 @@ hardware, runtime methodology and tolerance configuration behind them.
 complete layered DAG, unequal branches) are derived analytically and matched by
 the solver to a worst absolute error of **5.6e−12**, with the certificate
 closing on all 20 benchmark runs (E1). Brute-force grid search never beats the
-solver. 64/64 validation checks pass, including explicit residual checks —
+solver. 80/80 validation checks pass, including explicit residual checks —
 evader budget, KKT/stationarity, root equation, certificate gap, and
 shortest-path cost consistency — against the tolerances in `tolerances.py`.
 
@@ -124,9 +134,11 @@ Two things those checks do **not** do:
 * the randomised chord sampling **numerically validates convexity on sampled
   instances**; sampling cannot prove convexity, and the theorem rests on its
   proof in `FORMULATION.md` §3;
-* the check that the solver reaches the same `x*` from very different starting
-  points is *evidence* consistent with a unique optimal allocation, not a proof
-  of one. Uniqueness of `x*` is open; see `FORMULATION.md` §3.1.
+* likewise `[T-21]`/`[T-22]` hunt for counterexamples to Lemma 2 and
+  Proposition 4c and find none over 35 instances — corroboration of a proof,
+  never verification of one. This file has carried a wrong uniqueness proof
+  before, so **the §3 and §3.1 proofs should be read by a second qualified
+  person before submission** (see the checklist below).
 
 **The professor's topology** (`S→i1→i2→D`, `S→j1→D`, plus `i1→j1`), `x̄_A = x̄_B = 10`:
 
@@ -143,14 +155,18 @@ reproduces.
 This is observed behaviour on the tested graph family and instance sizes, not a
 complexity theorem. On the largest tested layered instance, with
 **16 777 216** distinct S–D paths, the oracle evaluated **2** of them and
-recovered the closed-form value to machine precision in 4.7 s on the hardware
-recorded in `out/RUN_METADATA.json`. The outer cutting-plane certificate does
-*not* close there (abs gap ≈ 2.1e−3 at the 200-iteration cap, `certified=no`):
-the value is accurate, but **not proved optimal**. Across the 13 layered
-instances in E7 the certificate closed on 5. Structurally, `parallel-3x3`
-(3 paths) and `layered-3x3` (27 paths) have *identical* value `0.421875` — on
-these families the value depends on layer width and depth, not on how many
-paths exist.
+recovered the closed-form value to machine precision on the hardware recorded
+in `out/RUN_METADATA.json`. Under the plain Kelley master the outer certificate
+did *not* close there (abs gap ≈ 2.1e−3 at the 200-iteration cap), and only
+5 of the 13 layered instances certified; with the stabilised boxstep master
+that is now the default, **all 13 certify**, that instance included
+(gap 7.2e−10, 62 iterations). E7 reports both masters side by side.
+
+Structurally, `parallel-3x3` (3 paths) and `layered-3x3` (27 paths) have
+*identical* value `0.421875`, and this is not a coincidence of the tested
+instances: Corollary 1 in `FORMULATION.md` §6 proves `w` parallel chains and the
+`w^L`-path layered DAG have the same value at every budget pair, so path count
+provably cannot determine `V*`.
 
 **Heuristics are not close.** The metric is
 
@@ -179,10 +195,50 @@ It is also observed optimal on the regular grid, but that case is *not* covered
 by any of our proofs. `betweenness` scores `V = 1`, total defender failure, on
 the lecture topology, because it starves a whole path.
 
+**Against the nearest papers' own methods, not just generic heuristics** (E9).
+The related-work section positions this project between two papers, so it is
+compared against adaptations of what those papers actually *do* — an
+evolutionary search (Ramirez-Marquez–Rocco–Levitin) and constraint generation
+with a log-linearised shortest-path separation (Nguyen–Song–Smith). Both are
+scored by the *same* exact best-response oracle, so the comparison isolates the
+method. Over 10 random DAGs:
+
+| method | mean excess | worst | certificate? |
+|---|---|---|---|
+| this work (certified cutting planes) | 0.00 % | 0.00 % | **yes** |
+| NSS-style constraint generation (adapted) | +0.61 % | +3.03 % | no |
+| RRL-style evolutionary search (adapted) | +3.64 % | +6.31 % | no |
+| greedy marginal (generic heuristic) | +12.52 % | +42.45 % | no |
+| uniform (generic heuristic) | +204.60 % | +265.71 % | no |
+
+The honest reading: the two adapted methods land *close* on value — far closer
+than generic heuristics — and **the difference that matters is that neither can
+certify anything.** The same shows up in the path oracle (E9b): on identical
+allocations the Lagrangian separation evaluates **2** paths and stops with a
+proof, while the linearised separation finds the *same* best response but,
+having no stopping rule, must exhaust all 13–57 paths. The contribution is the
+certificate and the stopping rule, not a better answer. `baselines.py` states
+exactly what was and was not carried over from each paper; neither is a rerun of
+published code.
+
+**`m > 1` is now bounded, not just flagged** (E10). Convexity provably fails for
+`m > 1`, so the cutting-plane lower bound is invalid there and the regime used
+to be reported with no bound at all. Substituting `u = x^m` makes the objective
+convex for *every* `m`, and the budget set's convex hull is exactly the simplex
+`{u ≥ 0 : Σu_i ≤ x̄_A^m}`, so minimising over the hull is a valid **lower**
+bound. That gives a real two-sided bracket — diamond at `m = 2`:
+`V* ∈ [0.667, 0.800]`. It is a **weaker** certificate: the relaxation gap does
+not shrink as the solver converges, it widens with `m`, and it never certifies
+the allocation is optimal.
+
 **Structure.** Serial depth compounds the defender's advantage geometrically;
 parallel redundancy forces the budget to spread. The optimal support must be a
 vertex cut — but defending nothing *but* a minimum cut is a bad rule
-(+700 % excess success probability on a 4-chain).
+(+700 % excess success probability on a 4-chain). And **path count provably does
+not determine the value**: `w` parallel chains (`w` paths) and the complete
+layered DAG with `L` layers of width `w` (`w^L` paths) have *identical* value at
+every budget pair (`FORMULATION.md` §6, Corollary 1) — so no function of the
+path count alone can predict `V*`.
 
 ---
 
@@ -193,10 +249,12 @@ vertex cut — but defending nothing *but* a minimum cut is a bad rule
 | `FORMULATION.md` | every mathematical claim with its proof, the closed forms, and the relation to the cited papers |
 | `core.py` | inner solver, Lagrangian path oracle, cutting-plane defender solver, certificate assembly, residual audits, baselines, brute force |
 | `tolerances.py` | every numerical threshold in one place: root, budget, KKT, certificate-gap and convexity tolerances, and the numerical floor |
+| `baselines.py` | head-to-head comparison methods: an RRL-style evolutionary search and an NSS-style linearised constraint generation, both **adaptations** (what was and was not carried over is documented in the module) |
+| `relaxation.py` | the `u = x^m` convex relaxation giving a **valid** lower bound for `m > 1`, where the ordinary bound is invalid |
 | `repro.py` | reproducibility metadata: seeds, package versions, repo commit, hardware, runtime methodology |
 | `graphs.py` | test topologies (chain, parallel, unequal branches, layered, grid, grid+bypass, random DAG, lecture example) |
 | `closed_form.py` | the four analytical benchmark families (derived in `FORMULATION.md` §6) |
-| `tests.py` | 64 validation checks (analytical benchmarks, exhaustive enumeration, brute-force search, randomised sampling, residuals, certificate reporting, boundary cases) |
+| `tests.py` | 80 validation checks (analytical benchmarks, exhaustive enumeration, brute-force search, randomised sampling, residuals, certificate reporting, boundary cases, the Lemma 2 / Prop. 4c / Corollary 1 counterexample hunts, arc contests, relaxation validity, head-to-head baselines, boxstep) |
 | `experiments.py` | the eight numerical experiments E1–E8 |
 | `run_all.py` | reproduce everything |
 | `out/` | generated tables (`.csv`), raw results (`.json`), figures (`.png`), logs, and `RUN_METADATA.json` |
@@ -213,9 +271,36 @@ vertex cut — but defending nothing *but* a minimum cut is a bad rule
 | E6 | does the certified gap actually close? |
 | E7 | observed scaling on layered graphs up to 1.7e7 paths, and random DAGs to 30 interior nodes |
 | E8 | effect of contest intensity `m` (`m > 1` reported as exploratory) |
+| E9 | head-to-head against the two nearest papers' own methods (adapted), and against their path-separation strategy |
+| E10 | a valid two-sided bracket for the `m > 1` regime via convex relaxation |
 
 Every experiment table carries the certificate columns `log_ub`, `log_lb`,
 `abs_gap`, `rel_gap`, `tol`, `certified`, `cert_status`, `iters`, `cuts`, `sec`.
+
+## Before submitting
+
+Two items on the pre-submission list are **not** things this repository can
+close by itself.
+
+1. **Have a second qualified reader check the proofs** — specifically
+   Proposition 4 (convexity, `FORMULATION.md` §3) and now also Lemma 2 and
+   Proposition 4c (uniqueness, §3.1). A test suite can find a counterexample —
+   as it correctly does for `m > 1` — but it cannot confirm a universally
+   quantified proof, and §3.1 has carried a wrong proof before. `[T-21]`,
+   `[T-22]` and `[T-6]` hunt for counterexamples and find none; that is
+   corroboration, not verification. Treat this as a hard prerequisite.
+
+2. **Pick a venue and reformat.** `paper/paper.tex` is currently a
+   single-column `article` draft (~20 pp) and is deliberately left that way
+   until the target is chosen:
+
+   | route | template | length | what to do |
+   |---|---|---|---|
+   | GameSec | LNCS, single column | 15–20 pp | keep the full numerical study; the E9 head-to-head is expected at this venue and now exists |
+   | CDC / ACC | IEEE, two column | 6–8 pp | move the §6 closed-form derivations to an appendix; foreground the convexity theorem and the certified path oracle as the two headline contributions |
+
+   The head-to-head comparison that used to block this decision (E9) is done, so
+   the choice is now purely about format and length.
 
 ## Known limitations
 
@@ -228,16 +313,25 @@ Every experiment table carries the certificate columns `log_ub`, `log_lb`,
 2. **Stackelberg, not simultaneous.** A commits first and B observes `x`. A
    simultaneous version would need mixed strategies over paths — the
    Nguyen–Song–Smith setting.
-3. **The certificate does not always close within 200 iterations** on the
-   widest layered instances (48–50 contested nodes): the value matches the
-   closed form to machine precision but Kelley's lower bound still has
-   ~2e−3 of log-gap, so those runs are reported `certified=no`. A
-   proximal-bundle or level-set master is the obvious fix. **No proven
-   convergence rate exists for the cutting-plane method here** — only the
-   empirical behaviour in E6/E7. Kelley's method has no rate guarantee in
-   general without extra curvature assumptions.
+3. **The certificate now closes on every instance we test** — this limitation
+   used to say it did not. Plain Kelley left ~2e−3 of log-gap on the widest
+   layered instances (48–50 contested nodes) at the 200-iteration cap. The fix
+   the repo itself named, a stabilised master, is implemented:
+   `solve_defender(master="boxstep")` picks each step from a trust region around
+   the incumbent while still taking the **lower bound from the unrestricted
+   master**, so the certificate means exactly what it did before. It certifies
+   all 13 layered instances in roughly a quarter of the iterations, and is now
+   the default (`master="kelley"` remains available, and E7 reports both).
+   Still open: **no proven convergence rate exists for either master here** —
+   only the measured behaviour in E6/E7, and nothing rules out a family on which
+   boxstep also stalls.
 4. **Independence across nodes** is assumed (the payoff is a product).
-5. **Node contests only**; arc contests would need each arc split into a node.
+5. **Arc contests are implemented** (was: "node contests only").
+   `graphs.arc_contest_graph` performs the line-graph relabelling — every arc
+   becomes a node, `S–D` paths correspond bijectively — so every result applies
+   after the transform; `[T-24]` checks the bijection and the resulting closed
+   form. Simultaneous node *and* arc contests with separate budgets are not
+   covered.
 6. **The path oracle is certified but not polynomial.** The path-selection
    subproblem is closely related to maximum-reliability path problems known to
    be NP-hard, which is why we use certified path generation rather than claim
@@ -259,11 +353,18 @@ Every experiment table carries the certificate columns `log_ub`, `log_lb`,
    no "first", "only" or "no prior work" claim is asserted anywhere in this
    repository. Confirm with the supervising professor before any submission
    claim of novelty.
-9. **Uniqueness of `x*` is NOT proved — open question.** An earlier version of
-   this repo claimed a proof; it was wrong. The argument tried to deduce strict
-   convexity of `G` in the full vector `x`, but `g_P` depends only on the nodes
-   *on* `P`, so two allocations differing only off the maximising path give
-   equality, not strict inequality. What survives is strict convexity restricted
-   to the coordinates of the maximising path (`FORMULATION.md` §3.1). `[T-14]`
-   shows the solver reaches the same `x*` from different starting points, which
-   is evidence, not proof.
+9. **Uniqueness of `x*` is now proved — but the proof wants a second reader.**
+   `FORMULATION.md` §3.1 proves it for `0 < m ≤ 1` when `V* < 1`, via Lemma 2
+   (active cover) rather than via strict convexity of `G`, which genuinely
+   fails. An earlier version of this repo claimed uniqueness by that wrong route
+   and retracted it; the retraction is kept. Because a test suite can refute a
+   proof but never confirm one, and because this exact claim has been wrong here
+   before, treat it as provisional until independently checked.
+10. **`m > 1` is bounded but still not characterised.** E10 gives a valid
+   bracket, but the relaxation gap widens with `m` (a factor of 124 on a 3-node
+   chain at `m = 3`) and never certifies the allocation. Whether a
+   mixed-strategy equilibrium takes over there is open.
+11. **Correlated node outcomes are still assumed away.** The payoff is a strict
+   product. A copula- or Markov-based model would break the separability that
+   the shortest-path reduction depends on, so it is a modelling project, not a
+   relabelling.

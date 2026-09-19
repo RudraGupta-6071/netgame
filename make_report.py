@@ -616,6 +616,61 @@ covering condition is necessary, not sufficient.</p>
 <p><strong>Centrality can fail completely.</strong> Betweenness scores
 <code>V = 1</code> on the lecture topology by starving an entire path.</p>
 
+<h3>10.1 Head-to-head against the nearest papers' own methods</h3>
+
+<p>The comparison above is against generic rules. The comparison a reader of the
+related-work section will actually ask for is against what the two nearest papers
+<em>do</em>: an evolutionary search (Ramirez-Marquez, Rocco &amp; Levitin) and
+constraint generation with a log-linearised shortest-path separation (Nguyen,
+Song &amp; Smith). Neither applies verbatim to this model, so both are
+<strong>adaptations</strong>, documented as such in <code>baselines.py</code>;
+neither is a rerun of published code. Both are scored by the <em>same</em> exact
+best-response oracle used by the certified solver, so the comparison isolates the
+method rather than the evaluation.</p>
+
+{tbl("E9_headtohead_summary.csv",
+     "Table 4b — defender-side search over 10 random DAGs. Excess success "
+     "probability = 100*(V_method/V* - 1); lower is better. Only the first row "
+     "carries an optimality certificate.")}
+
+<div class="box key">
+<h4>The honest reading of Table 4b</h4>
+<p>The two adapted methods land <em>close</em> on value — far closer than the
+generic heuristics — and that is the point worth reporting. The difference that
+matters is not a large value gap; it is that <strong>neither of them can certify
+anything</strong>, so neither can tell you how far from optimal it stopped. The
+same pattern appears in the path oracle below: the two separation rules find the
+<em>same</em> best response, and the advantage of the Lagrangian one is the
+stopping rule, not the answer.</p>
+</div>
+
+{tbl("E9_separation.csv",
+     "Table 4c — path separation, mean paths evaluated per best response over 12 "
+     "random allocations each. The Lagrangian relaxation is tight at the optimal "
+     "multiplier, so it stops with a proof after two paths; the linearised "
+     "separation has no such stopping rule and must exhaust the path set.")}
+
+<h3>10.2 A valid bracket for the <code>m &gt; 1</code> regime</h3>
+
+<p>For <code>m &gt; 1</code> convexity provably fails, so the cutting-plane lower
+bound is invalid and the regime carried no bound at all. One is still available.
+Substituting <code>u<sub>i</sub> = x<sub>i</sub><sup>m</sup></code> makes
+<code>-log(u + y<sup>m</sup>)</code> convex for <em>every</em> <code>m</code>;
+what breaks is the feasible set, and the convex hull of
+<code>{{u &ge; 0 : &Sigma;<sub>i</sub> u<sub>i</sub><sup>1/m</sup> &le;
+x&#772;<sub>A</sub>}}</code> is exactly the simplex
+<code>{{u &ge; 0 : &Sigma;<sub>i</sub> u<sub>i</sub> &le;
+x&#772;<sub>A</sub><sup>m</sup>}}</code> (by the
+<code>&#8467;<sub>m</sub> &le; &#8467;<sub>1</sub></code> norm inequality, which
+needs <code>m &ge; 1</code>). Minimising a convex function over a superset of the
+feasible set is a valid lower bound.</p>
+
+{tbl("E10_m_gt_1_bracket.csv",
+     "Table 4d — valid two-sided bracket on V* for m > 1. This is a WEAKER "
+     "certificate: the relaxation gap does not vanish as the solver converges, "
+     "it widens with m, and it never certifies that the reported allocation is "
+     "optimal.")}
+
 <h2 id="perf">11. Computational performance</h2>
 
 {tbl("E7_scaling.csv",
@@ -713,30 +768,48 @@ mixed strategies.</p>
 <h2 id="lim">13. Limitations</h2>
 
 <ol>
-<li><strong><code>m &gt; 1</code> carries no guarantee.</strong> Convexity provably
-fails, with an explicit counterexample, so the lower bound is not valid and no
-gap certifies anything there. The solver runs and the numbers look sensible,
-but those rows are labelled <code>EXPLORATORY / NON-CERTIFIED</code> in the
-output and carry <code>convexity_proved = false</code>.</li>
+<li><strong><code>m &gt; 1</code> carries no optimality guarantee, but is now
+bounded.</strong> Convexity provably fails there, with an explicit
+counterexample, so the cutting-plane lower bound is invalid and those rows stay
+labelled <code>EXPLORATORY / NON-CERTIFIED</code> with
+<code>convexity_proved = false</code>. A <em>valid</em> two-sided bracket is
+available separately: substituting <code>u = x<sup>m</sup></code> convexifies
+the objective for every <code>m</code>, and the budget set's convex hull is
+exactly the simplex <code>{{u &ge; 0 : &Sigma;u<sub>i</sub> &le;
+x&#772;<sub>A</sub><sup>m</sup>}}</code>, so minimising over the hull lower-bounds
+<code>V*</code>. The bracket is loose and widens with <code>m</code>, and it
+still does not certify that the allocation is optimal.</li>
 <li><strong>Stackelberg, not simultaneous.</strong> A commits first and B observes
 <code>x</code>. Under simultaneous play a pure equilibrium may fail to exist and
 mixed strategies over paths would be needed — the Nguyen–Song–Smith setting, and
 the natural next step.</li>
-<li><strong>The certificate does not always close</strong> within the iteration cap
-on the widest instances, as Table 5 shows; those runs report
-<code>certified=no</code> and are not proved optima.</li>
+<li><strong>The certificate now closes on every instance tested.</strong> Under
+the plain Kelley master it did not: 8 of the 13 layered instances hit the
+200-iteration cap with up to <code>2e&minus;3</code> of log-gap. The stabilised
+BOXSTEP master (now the default) picks each step inside a trust region around
+the incumbent while still taking the lower bound from the <em>unrestricted</em>
+master, so the certificate is unchanged in meaning; it certifies all 13 in
+roughly a quarter of the iterations. What is still missing is a proven
+convergence <em>rate</em> for either master.</li>
 <li><strong>Independence across nodes</strong> is assumed; the payoff is a product.
 Real detection events along a route are usually correlated.</li>
-<li><strong>Node contests only.</strong> Arc contests would be a relabelling — split
-each arc into a node — but are not implemented.</li>
+<li><strong>Arc contests are implemented.</strong> The line-graph relabelling
+(every arc becomes a node, <code>S&ndash;D</code> paths corresponding
+bijectively) is <code>graphs.arc_contest_graph</code>, and the solver reproduces
+the resulting closed form to machine precision. Simultaneous node <em>and</em>
+arc contests with separate budgets are not covered.</li>
 <li><strong>The path oracle is certified but not polynomial.</strong> Worst case it
 degrades to enumeration. The path-selection subproblem is closely related to
 maximum-reliability path problems known to be NP-hard; NP-hardness of the exact
 continuous model here is neither proved nor claimed.</li>
-<li><strong>Convexity is not strict convexity.</strong> The objective is convex
-for <code>0 &lt; m &le; 1</code> under the stated model. This does not, by
-itself, imply strict convexity or uniqueness of the global minimizer; an
-earlier claim of uniqueness was retracted.</li>
+<li><strong>Convexity is not strict convexity, but uniqueness still holds.</strong>
+The objective is convex for <code>0 &lt; m &le; 1</code>; it is genuinely NOT
+strictly convex, so uniqueness does not follow from convexity. It is proved
+separately (Lemma 2 + Proposition 4c): at an optimum every node carrying budget
+lies on an active path, which is enough to force two candidate optima to
+coincide. An earlier, different uniqueness proof was wrong and was retracted;
+because a test suite can refute a proof but not confirm one, this one should be
+read by a second qualified person before it is relied on.</li>
 <li><strong>No novelty claim is made.</strong> No "first", "only" or "no prior
 work" statement appears in this project; a keyword literature search is not a
 systematic review.</li>

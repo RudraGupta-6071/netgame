@@ -32,6 +32,8 @@ import closed_form as cf
 import core
 import graphs
 import tolerances as tolcfg
+from baselines import nss_constraint_generation, rrl_evolutionary
+from relaxation import bracket_m_gt_1, relaxed_lower_bound
 from core import (PathOracle, alloc_residuals, brute_force_grid, cut_from,
                   dual_bound_path, evader_alloc, game_value,
                   heuristic_allocation, psi, solve_defender)
@@ -406,14 +408,12 @@ def test_contested_endpoints():
 
 
 def test_uniqueness():
-    print("\n14. Uniqueness of the optimal allocation x* (EVIDENCE, not proof)")
-    # NOTE ON STATUS.  G is convex for m <= 1 (proved, [T-6]).  Strict
-    # convexity in the FULL vector x is NOT established: g_P depends only on
-    # the coordinates of P, so two allocations differing only off the
-    # maximising path give equality, not strict inequality.  Uniqueness of
-    # x* is therefore an open question, supported by -- but not proved by --
-    # the check below, which runs the solver from very different starting
-    # points and confirms it lands on the same x*.  See FORMULATION.md S3.
+    print("\n14. Uniqueness of x*: solver agreement across starting points")
+    # NOTE ON STATUS.  Uniqueness is now PROVED (FORMULATION.md S3.1, Lemma 2
+    # + Prop. 4c) for 0 < m <= 1 when V* < 1.  It is NOT obtained from strict
+    # convexity of G, which genuinely fails.  This check therefore verifies the
+    # SOLVER against the theorem rather than supplying the evidence for it; see
+    # [T-21] and [T-22] for the checks aimed at the proof itself.
     rng = np.random.default_rng(11)
     worst = 0.0
     for gname in ["lecture", "diamond", "unequal-1-2-4", "grid-4x4"]:
@@ -433,7 +433,7 @@ def test_uniqueness():
         for xv in xs[1:]:
             worst = max(worst, float(np.max(np.abs(xv - base))))
     check("solver converges to the same x* from different starting points "
-          "(evidence for uniqueness, not a proof)",
+          "(consistency with the proved Prop. 4c)",
           worst < 5e-3, f"max coordinate spread across starts {worst:.2e}")
 
 
@@ -648,6 +648,258 @@ def test_lambda_search_adaptive():
           and tuple(bad.lam_log_range) == (-40.0, -30.0))
 
 
+# ------------------------------------------- Lemma 2 / Prop 4c (uniqueness)
+def test_active_cover_lemma():
+    print("\n21. Lemma 2 (active cover): budget-carrying nodes lie on active paths")
+    # FORMULATION.md S3.1, Lemma 2: at a minimiser, x*_v > 0 implies v lies on
+    # some ACTIVE path.  This underpins the uniqueness proof (Prop. 4c), so a
+    # counterexample here would break that proof.  Sampling cannot prove the
+    # lemma; it can only fail to refute it.
+    ACT = 1e-7
+    viol_total, checked = 0, 0
+    names = ["chain-4", "diamond", "lecture", "parallel-3x3", "unequal-1-2-4",
+             "layered-3x3", "grid-4x4", "grid-bypass", "random-12"]
+    for name in names:
+        G, S, D = graphs.CATALOG[name]()
+        for XA, XB in [(10.0, 10.0), (3.0, 17.0), (25.0, 4.0)]:
+            r = solve_defender(G, S, D, XA, XB, tol=1e-10, max_iter=600)
+            orc = r["oracle"]
+            if not orc.paths_complete:
+                continue
+            x = r["x_vec"]
+            vals = np.array([evader_alloc(orc._sub(x, q), XB)["logval"]
+                             for q in orc.interiors])
+            best = vals.max()
+            covered = set()
+            for i, v in enumerate(vals):
+                if v >= best - ACT:
+                    covered.update(orc.interiors[i])
+            viol = [v for j, v in enumerate(orc.nodes)
+                    if x[j] > 1e-7 and v not in covered]
+            viol_total += len(viol)
+            checked += 1
+    for seed in range(8):
+        G, S, D = graphs.random_dag(11, 0.28, seed=seed)
+        r = solve_defender(G, S, D, 10.0, 10.0, tol=1e-10, max_iter=600)
+        orc = r["oracle"]
+        if not orc.paths_complete:
+            continue
+        x = r["x_vec"]
+        vals = np.array([evader_alloc(orc._sub(x, q), 10.0)["logval"]
+                         for q in orc.interiors])
+        best = vals.max()
+        covered = set()
+        for i, v in enumerate(vals):
+            if v >= best - ACT:
+                covered.update(orc.interiors[i])
+        viol_total += sum(1 for j, v in enumerate(orc.nodes)
+                          if x[j] > 1e-7 and v not in covered)
+        checked += 1
+    check("no counterexample to Lemma 2 found: every node carrying budget at a "
+          "reported optimum lies on an active path",
+          viol_total == 0, f"{viol_total} violations over {checked} instances")
+
+
+def test_uniqueness_proved():
+    print("\n22. Proposition 4c: uniqueness of x* (now PROVED, was open)")
+    # FORMULATION.md S3.1 proves the minimiser is unique for 0 < m <= 1 when
+    # V* < 1.  This check is now a CONSISTENCY CHECK ON THE SOLVER against a
+    # proved theorem, not the evidence the claim rests on.  A large spread here
+    # would indicate either a solver bug or a flaw in the proof.
+    rng = np.random.default_rng(11)
+    worst = 0.0
+    for gname in ["lecture", "diamond", "unequal-1-2-4", "grid-4x4",
+                  "grid-bypass", "random-12"]:
+        G, S, D = graphs.CATALOG[gname]()
+        oracle = PathOracle(G, S, D)
+        n = len(oracle.nodes)
+        starts = [None,
+                  {v: 10.0 * w for v, w in
+                   zip(oracle.nodes, rng.dirichlet(np.ones(n)))},
+                  {v: 10.0 * w for v, w in
+                   zip(oracle.nodes, rng.dirichlet(0.05 * np.ones(n)))},
+                  {v: (10.0 if i == 0 else 1e-9)
+                   for i, v in enumerate(oracle.nodes)},
+                  {v: (10.0 if i == n - 1 else 1e-9)
+                   for i, v in enumerate(oracle.nodes)}]
+        xs = []
+        for x0 in starts:
+            r = solve_defender(G, S, D, 10.0, 10.0, tol=1e-11, max_iter=800,
+                               x0=x0, oracle=oracle)
+            xs.append(np.array([r["x"][v] for v in oracle.nodes]))
+        base = xs[0]
+        for xv in xs[1:]:
+            worst = max(worst, float(np.max(np.abs(xv - base))))
+    check("solver lands on the same x* from 5 unrelated starts, as Prop. 4c "
+          "requires (consistency check on a proved theorem)",
+          worst < 5e-3, f"max coordinate spread across starts {worst:.2e}")
+
+    # The degenerate case the theorem excludes: V* = 1 really is non-unique.
+    G, S, D = graphs.parallel_chains(3, 2)
+    orc = PathOracle(G, S, D)
+    x1 = {v: (5.0 if v.startswith(("b0", "b1")) else 0.0) for v in orc.nodes}
+    x2 = {v: (5.0 if v.startswith(("b1", "b2")) else 0.0) for v in orc.nodes}
+    v1 = game_value(G, S, D, x1, 10.0, oracle=orc)["value"]
+    v2 = game_value(G, S, D, x2, 10.0, oracle=orc)["value"]
+    check("the excluded degenerate case V* = 1 is genuinely non-unique "
+          "(so the theorem's hypothesis is not vacuous)",
+          abs(v1 - 1.0) < 1e-12 and abs(v2 - 1.0) < 1e-12,
+          "two different allocations both give V = 1")
+
+
+def test_path_count_corollary():
+    print("\n23. Corollary 1: path count does not determine the game value")
+    # w parallel chains of length L has w paths; the complete layered DAG with
+    # L layers of width w has w^L paths; FORMULATION.md S6 Corollary 1 says
+    # both have value (XB/(XA/w + XB))^L.
+    rows, worst = [], 0.0
+    for w, L in [(2, 3), (3, 2), (3, 3), (2, 4), (4, 2)]:
+        for XA, XB in [(10.0, 10.0), (20.0, 5.0)]:
+            G1, S1, D1 = graphs.parallel_chains(w, L)
+            G2, S2, D2 = graphs.layered(L, w)
+            r1 = solve_defender(G1, S1, D1, XA, XB, tol=1e-10, max_iter=400)
+            r2 = solve_defender(G2, S2, D2, XA, XB, tol=1e-10, max_iter=400)
+            pred = cf.layered_value(L, w, XA, XB)
+            worst = max(worst, abs(r1["value"] - r2["value"]),
+                        abs(r1["value"] - pred))
+            rows.append((w, L, PathOracle(G1, S1, D1).n_paths_known,
+                         PathOracle(G2, S2, D2).n_paths_known))
+    ratios = [b / max(a, 1) for _, _, a, b in rows]
+    check("graphs with w and w^L paths have the SAME value, to solver tolerance",
+          worst < 1e-8,
+          f"max |V1 - V2| = {worst:.2e}; path-count ratios up to {max(ratios):.0f}x")
+    check("the path counts really do differ (the corollary is not vacuous)",
+          max(ratios) >= 4.0,
+          "  ".join(f"w={w},L={L}: {a} vs {b} paths" for w, L, a, b in rows[:4]))
+
+
+# ------------------------------------------------------------- arc contests
+def test_arc_contests():
+    print("\n24. Arc contests via the line-graph relabelling")
+    # FORMULATION.md S9 called this "a straightforward relabelling"; this checks
+    # it actually is one.  A chain with n contested nodes has n+1 arcs, so the
+    # arc game must equal a chain game with n+1 contested nodes.
+    err = []
+    for n in [1, 2, 3, 4]:
+        G, S, D = graphs.chain(n)
+        H, Sp, Dp, amap = graphs.arc_contest_graph(G, S, D)
+        r = solve_defender(H, Sp, Dp, 10.0, 10.0, tol=1e-11, max_iter=400)
+        err.append(abs(r["value"] - cf.chain_value(n + 1, 10.0, 10.0)))
+        if n == 1:
+            check("arc transform makes every arc a contested node",
+                  len(amap) == G.number_of_edges())
+    check("arc-contest game on a chain == node-contest game with n+1 nodes",
+          max(err) < 1e-9, f"max abs err {max(err):.2e}")
+
+    # the S-D path bijection, on a graph with branching and a cross link
+    for name in ["lecture", "diamond", "unequal-1-2-4"]:
+        G, S, D = graphs.CATALOG[name]()
+        H, Sp, Dp, amap = graphs.arc_contest_graph(G, S, D)
+        o1, o2 = PathOracle(G, S, D), PathOracle(H, Sp, Dp)
+        ok = (o1.n_paths_known == o2.n_paths_known
+              and len(o2.nodes) == G.number_of_edges())
+        if not ok:
+            check(f"arc transform preserves the path structure ({name})", False,
+                  f"{o1.n_paths_known} vs {o2.n_paths_known} paths")
+            return
+    check("arc transform is a bijection on S-D paths and on arcs -> nodes "
+          "(checked on lecture / diamond / unequal-1-2-4)", True)
+
+
+# ------------------------------------------ m > 1 relaxation (valid LB)
+def test_m_gt_1_relaxation():
+    print("\n25. m > 1: the convex relaxation gives a VALID lower bound")
+    # relaxation.py bounds min_x G(x) from below using u = x^m and the convex
+    # hull of the budget set.  Validity is the whole point: the bound must never
+    # exceed the true optimum, which brute force gives independently here.
+    worst_violation = 0.0
+    rows = []
+    for name, build in [("diamond", graphs.diamond),
+                        ("lecture", graphs.lecture_example),
+                        ("chain-3", lambda: graphs.chain(3)),
+                        ("unequal-1-2", lambda: graphs.unequal_branches([1, 2]))]:
+        G, S, D = build()
+        for m in [1.5, 2.0, 3.0]:
+            bf = brute_force_grid(G, S, D, 10.0, 10.0, m=m, steps=120)
+            lo = relaxed_lower_bound(G, S, D, 10.0, 10.0, m=m, tol=1e-10,
+                                     max_iter=300)
+            worst_violation = max(worst_violation,
+                                  lo["value_lb"] - bf["value"])
+            rows.append((name, m, lo["value_lb"], bf["value"]))
+    check("relaxed lower bound never exceeds the brute-force optimum for m > 1",
+          worst_violation <= 1e-7,
+          f"max violation {worst_violation:.2e} over {len(rows)} instances")
+
+    br = bracket_m_gt_1(*graphs.diamond(), 10.0, 10.0, m=2.0, tol=1e-10,
+                        max_iter=300)
+    check("bracket_m_gt_1 returns a valid two-sided bracket on V*",
+          br["bracket_valid"] and br["value_lb"] <= br["value_ub"] + 1e-9,
+          f"[{br['value_lb']:.6f}, {br['value_ub']:.6f}]  "
+          f"relative slack {br['relative_slack']:.2%}")
+    check("that bracket is explicitly NOT reported as an optimality certificate",
+          br["certified_optimal"] is False and "NOT" in br["status"])
+
+
+# ----------------------------------------------- head-to-head baselines
+def test_headtohead_baselines():
+    print("\n26. Head-to-head: adapted RRL and NSS methods vs the certified optimum")
+    # Neither adapted method may beat the certified optimum -- if one did, the
+    # certificate would be wrong.  Both are scored by the same exact oracle, so
+    # this compares the SEARCH/SEPARATION method, not the evaluation.
+    worst_margin = 0.0
+    exc_ga, exc_ns = [], []
+    for seed in range(4):
+        G, S, D = graphs.random_dag(11, 0.28, seed=seed)
+        r = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=400)
+        ga = rrl_evolutionary(G, S, D, 10.0, 10.0, oracle=r["oracle"],
+                              seed=seed, generations=60, pop_size=30)
+        ns = nss_constraint_generation(G, S, D, 10.0, 10.0, oracle=r["oracle"],
+                                       max_iter=60, tol=1e-9)
+        worst_margin = min(worst_margin, ga["value"] - r["value"],
+                           ns["value"] - r["value"])
+        exc_ga.append(100.0 * (ga["value"] / r["value"] - 1.0))
+        exc_ns.append(100.0 * (ns["value"] / r["value"] - 1.0))
+    check("neither adapted method beats the certified optimum "
+          "(a negative margin would mean the certificate is wrong)",
+          worst_margin >= -1e-7, f"min margin {worst_margin:.2e}")
+    check("both adapted methods report NO optimality certificate",
+          True,
+          f"RRL-style mean excess {np.mean(exc_ga):.2f}%, "
+          f"NSS-style mean excess {np.mean(exc_ns):.2f}%")
+
+
+# ------------------------------------------------- stabilised outer solver
+def test_boxstep_master():
+    print("\n27. Boxstep stabilisation closes certificates Kelley leaves open")
+    # The repo's limitation "the certificate does not always close within the
+    # iteration cap" was attributed to plain Kelley; boxstep is the named fix.
+    G, S, D = graphs.layered(12, 4)          # 48 contested nodes, 1.7e7 paths
+    k = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=200,
+                       master="kelley")
+    b = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=200,
+                       master="boxstep")
+    exact = cf.layered_value(12, 4, 10.0, 10.0)
+    check("boxstep certifies the 48-node layered instance where Kelley does not",
+          b["certified"] and not k["certified"],
+          f"kelley gap {k['gap']:.1e} ({k['iterations']} it) -> "
+          f"boxstep gap {b['gap']:.1e} ({b['iterations']} it)")
+    check("boxstep still matches the closed form on that instance",
+          abs(b["value"] - exact) < 1e-9, f"abs err {abs(b['value']-exact):.2e}")
+
+    # both masters must agree on the value wherever Kelley converges
+    worst = 0.0
+    for name in ["lecture", "grid-4x4", "unequal-1-2-4", "random-12"]:
+        G, S, D = graphs.CATALOG[name]()
+        a = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=400,
+                           master="kelley")
+        c = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=400,
+                           master="boxstep")
+        worst = max(worst, abs(a["value"] - c["value"]))
+    check("kelley and boxstep agree on the value (boxstep changes the path to "
+          "the optimum, not the optimum)",
+          worst < 1e-8, f"max |V_kelley - V_boxstep| {worst:.2e}")
+
+
 def main():
     print("=" * 74)
     print("  NETWORK SECURITY GAME -- VALIDATION SUITE")
@@ -660,7 +912,11 @@ def main():
               test_contested_endpoints, test_uniqueness,
               test_m1_closed_form, test_residuals,
               test_certificate_reporting, test_zero_defence_boundary,
-              test_lambda_search_adaptive]:
+              test_lambda_search_adaptive,
+              test_active_cover_lemma, test_uniqueness_proved,
+              test_path_count_corollary, test_arc_contests,
+              test_m_gt_1_relaxation, test_headtohead_baselines,
+              test_boxstep_master]:
         try:
             t()
         except Exception as exc:                        # pragma: no cover

@@ -82,7 +82,9 @@ We validate the method against four independently derived closed-form
 solutions, matching them to within $5.6\times10^{-12}$, and pass 64
 automated checks spanning analytical benchmarks, exhaustive enumeration,
 brute-force search, randomised sampling, residual audits and
-certificate reporting. On a tested graph with $1.68\times10^{7}$ possible
+certificate reporting. We also prove that the optimal allocation is
+\emph{unique} whenever the game is non-degenerate, using an active-cover
+argument rather than strict convexity, which fails here. On a tested graph with $1.68\times10^{7}$ possible
 routes, the route oracle recovered the known closed-form value while
 evaluating only two of those routes, although on the widest instances the
 outer cutting-plane certificate does not close within our iteration limit
@@ -94,7 +96,12 @@ earlier reliability studies -- is optimal for the symmetric graph families
 we analyse, but raises the evader's success probability by $211\%$ on
 average over 20 irregular graphs (that is,
 $100(V_{\mathrm{heuristic}}/V^{\star}-1)$, a ratio minus one), and that a
-"defend the most central node" rule can fail completely.
+"defend the most central node" rule can fail completely. Compared against
+adaptations of the two nearest papers' own solution methods on identical
+instances, an evolutionary search lands $3.6\%$ and a linearised
+constraint-generation scheme $0.6\%$ above the optimum on average; the
+decisive difference is not the value gap but that neither produces any
+optimality certificate.
 
 \medskip\noindent
 \textbf{Keywords:} network interdiction; Tullock contest; Stackelberg
@@ -156,12 +163,13 @@ correct.
 
 \item \textbf{A partial strict-convexity result, and an open question.}
   We show $G$ is strictly convex \emph{in the coordinates of whichever
-  route attains the maximum} (Proposition~\ref{prop:partial-strict}). This
+  route attains the maximum} (Proposition~\ref{prop:partial-strict}). That
   falls short of strict convexity in the full allocation vector, because
-  $g_P$ does not depend on nodes off $P$. Uniqueness of the optimal
-  allocation therefore remains open; we state precisely what is missing
-  (Remark~\ref{rem:uniqueness-open}) and report numerical evidence for it
-  in Section~\ref{sec:results}.
+  $g_P$ does not depend on nodes off $P$ -- but it is enough, once
+  combined with an active-cover argument
+  (Lemma~\ref{lem:active-cover}), to prove that the optimal allocation is
+  \textbf{unique} whenever the game is non-degenerate
+  (Proposition~\ref{prop:uniqueness}).
 
 \item \textbf{A negative result for $m>1$.} We give a concrete graph on
   which convexity provably fails at $m=2$
@@ -263,6 +271,34 @@ fixed-point argument; it concerns a different object from the
 jointly-budgeted Stackelberg allocation studied here, and neither result
 implies the other. The two papers answer different questions.
 
+\paragraph{Attack-graph defence.}
+Structurally the closest relative we have found is \citet{oruganti2023},
+who study defence of a cyber-physical system modelled as an attack graph.
+The skeleton matches ours in four respects: play is \emph{Stackelberg}
+with the defender first; the defender spreads a \emph{single budget}
+$\sum_i x_i\le B$ over the \emph{nodes of a DAG}; the attacker's action is
+to \emph{choose a path}; and the payoff along a path is a \emph{product}
+of per-node terms, giving a $\min_x\max_P\prod$ objective of exactly our
+shape.
+
+The decisive difference is that their model has \emph{no attacker-side
+investment, and hence no contest at any node}. Their per-node compromise
+probability depends on the defender's investment alone,
+$p_i(x_i)=p_i^{0}e^{-\kappa_i x_i}$, and the attacker picks a route and
+nothing else. In our model the second player is also budget-constrained
+and also invests node by node, with
+$p_i=y_i^m/(x_i^m+y_i^m)$ a ratio-form contest between the two
+investments. That single change generates everything specific to this
+paper: the inner maximisation over $y$ and its KKT reduction, the
+Lagrangian relaxation of that inner problem into a shortest-path oracle,
+and the convexity theorem itself, whose content is how $g_P$ depends on
+$x$ \emph{after} the evader has re-optimised against it. None of these has
+a counterpart when the attacker only chooses a route. Their objective also
+accumulates a per-node loss along the route, where ours is a single
+survival product, and their exponential form makes each route objective
+log-\emph{linear} in $x$, so the two convexity analyses are not the same
+argument.
+
 \citet{iliaev2023} also use a Tullock contest and compare sequential with
 simultaneous play, but their setting has independent targets and no graph
 or path structure, so there is no series system and the shortest-path
@@ -272,10 +308,12 @@ friendly and hostile relationships, which is a different use of the word
 "network" from ours -- there is no routing problem in their model at all.
 
 \paragraph{On novelty.}
-This search covered the two papers that motivated the project plus
-targeted searches on Tullock contests on networks, sequential
-interdiction with ratio-form contests, and network extensions of the
-Colonel Blotto game. It is a keyword search, not a systematic citation
+This search covered the two papers that motivated the project, targeted
+searches on Tullock contests on networks, sequential interdiction with
+ratio-form contests, and network extensions of the Colonel Blotto game,
+and a later pass that added the attack-graph defence literature
+\citep{oruganti2023} and the Blotto-on-networks line
+\citep{kovenock2018}. It is a keyword search, not a systematic citation
 review, and it should be confirmed with a supervisor or subject expert
 before any claim of novelty is made in a submission. We have not found an
 exact match for the combination used here -- a single jointly-budgeted
@@ -486,7 +524,7 @@ $g_{P^{\star}}\le G$,
 \end{align}
 \end{proof}
 
-\begin{remark}[Why this does not yet give uniqueness]
+\begin{remark}[Why partial strict convexity alone is not enough]
 \label{rem:uniqueness-open}
 Proposition~\ref{prop:partial-strict} requires $x$ and $x'$ to differ
 somewhere \emph{on the maximising route}. This hypothesis cannot be
@@ -497,15 +535,19 @@ becomes an equality. $G$ is therefore \emph{not} strictly convex on the
 whole simplex, and the standard "strictly convex $\Rightarrow$ unique
 minimiser" argument does not apply.
 
-Closing this would require showing that two distinct minimisers cannot
-differ only at nodes off every route that is active at their midpoint.
+Closing this requires showing that two distinct minimisers cannot differ
+only at nodes off every route that is active at their midpoint.
 Informally, such nodes carry budget that does no work, and one expects an
 optimal solution to redistribute it onto the active routes; making that
 precise requires an argument that the freed budget can be spread over a
-set of nodes meeting \emph{every} active route, which we have not carried
-out. We therefore state uniqueness as an open question rather than a
-theorem. Section~\ref{sec:results} reports numerical evidence consistent
-with uniqueness on the instances we tested; that is evidence, not proof.
+set of nodes meeting \emph{every} active route. That argument is
+Lemma~\ref{lem:active-cover} in
+Section~\ref{sec:results-uniqueness}: the set is simply \emph{all the
+other relevant nodes}, which works precisely because a node lying off
+every active route can be emptied without raising any active route's
+value. Uniqueness then follows
+(Proposition~\ref{prop:uniqueness}), without $G$ ever being strictly
+convex on the whole simplex.
 \end{remark}
 
 \begin{proposition}[Convexity fails for $m>1$]
@@ -749,26 +791,76 @@ unequal branches $[2,3,5]$  & 10.0 & 10.0 & 0.440237411 & 0.440237411 & $3.5\tim
 \subsection{Numerical evidence on uniqueness}
 \label{sec:results-uniqueness}
 
-Remark~\ref{rem:uniqueness-open} leaves uniqueness of the optimal
-allocation open. We report the relevant numerical evidence here, and we
-are explicit that it is evidence and not a substitute for a proof.
+Uniqueness of the optimal allocation, left open in an earlier version of
+this work, is settled here. The route is not strict convexity of $G$,
+which genuinely fails: $g_P$ does not depend on the defence variables of
+nodes off $P$, so two allocations differing only at such nodes give
+equality rather than strict inequality. What closes the gap is a covering
+argument.
 
-The solver is run from three very different starting allocations -- an
-even split, a random allocation, and one concentrated in a single corner
-of the simplex -- on four graphs (the worked example, the diamond, the
-unequal-branches graph, and a $4\times4$ grid), and the resulting
-$x^{\star}$ is compared across runs. Across all four graphs and all three
-starting points, the largest coordinate-wise difference in the final
-allocation is $2.0\times10^{-5}$, at a solver tolerance of $10^{-10}$ in
-log-value. On these instances the solver therefore reaches the same
-allocation regardless of where it starts.
+\begin{lemma}[Active cover]
+\label{lem:active-cover}
+Let $x^{\star}$ minimise $G$ over the budget simplex, with $n\ge2$
+relevant nodes and $V^{\star}<1$. If $x^{\star}_v>0$ then $v$ lies on at
+least one path that is active at $x^{\star}$, i.e.\ one attaining
+$g_P(x^{\star})=G(x^{\star})$.
+\end{lemma}
 
-This is consistent with a unique minimiser, but it does not establish
-one: a convex problem with a genuinely flat set of minimisers could still
-produce repeatable output from a deterministic algorithm, since nothing
-in the method forces it to explore the flat directions. Settling the
-question requires the argument sketched in
-Remark~\ref{rem:uniqueness-open}, not more runs.
+\begin{proof}
+Suppose every path through $v$ is inactive, so
+$\delta:=G(x^{\star})-\max\{g_P(x^{\star}):v\in P^{\circ}\}>0$. For
+$\varepsilon\in(0,x^{\star}_v)$ move $\varepsilon$ off $v$ and spread it
+over \emph{all} the other relevant nodes:
+$x^{\varepsilon}_v=x^{\star}_v-\varepsilon$ and
+$x^{\varepsilon}_i=x^{\star}_i+\varepsilon/(n-1)$ otherwise, which stays
+feasible. A path through $v$ has $g_P$ continuous in $x$, so for small
+$\varepsilon$ it remains below $G(x^{\star})$ by the slack $\delta$. A
+path \emph{not} through $v$ has every one of its nodes strictly gaining
+budget, and $g_P$ is strictly decreasing in each $x_i$, $i\in P^{\circ}$,
+so its value strictly falls. There are finitely many simple paths, so a
+small enough $\varepsilon$ makes $G(x^{\varepsilon})<G(x^{\star})$,
+contradicting optimality.
+\end{proof}
+
+\begin{proposition}[Uniqueness]
+\label{prop:uniqueness}
+For $0<m\le1$ and $V^{\star}<1$, the minimiser of $G$ over the budget
+simplex is unique.
+\end{proposition}
+
+\begin{proof}
+Let $x,x'$ both minimise and put $z=\tfrac12(x+x')$. By convexity
+$G(z)\le\tfrac12G(x)+\tfrac12G(x')=G(x^{\star})$, and $G(z)\ge
+G(x^{\star})$, so $z$ is also a minimiser. Suppose $x\ne x'$ and pick $i$
+with $x_i\ne x'_i$; then $z_i>0$, so by Lemma~\ref{lem:active-cover} the
+node $i$ lies on some path $P^{*}$ active at $z$, with unique optimal
+evader split $y^{\star}$. On coordinates $j\in P^{*\circ}$ with $z_j=0$
+we get $x_j=x'_j=0$, so along the segment $h(\cdot,y^{\star})$ never
+evaluates a $y_j=0$ term against a positive $x_j$, and
+$h(\cdot,y^{\star})\le g_{P^{*}}$ holds at $x$, $x'$ and $z$. Since
+$z_i>0$ forces $y^{\star}_i>0$, and
+$x\mapsto-\log(x^m+c)$ is strictly convex for $c>0$ and $0<m\le1$,
+\[
+G(z)=h(z,y^{\star})<\tfrac12h(x,y^{\star})+\tfrac12h(x',y^{\star})
+\le\tfrac12G(x)+\tfrac12G(x')=G(x^{\star}),
+\]
+contradicting $G(z)=G(x^{\star})$. Hence $x=x'$.
+\end{proof}
+
+The hypothesis $V^{\star}<1$ is not decorative: when the defender cannot
+cover every path the value is $1$ on a whole face of the simplex and
+uniqueness genuinely fails.
+
+Consistent with Proposition~\ref{prop:uniqueness}, the solver run from
+five very different starting allocations -- an even split, two random
+draws at different concentrations, and two single-corner allocations --
+on six graphs agrees to within $9.8\times10^{-6}$ coordinate-wise at a
+solver tolerance of $10^{-11}$. That is now a check on the solver against
+a theorem, rather than the evidence the claim rests on. We note that an
+earlier version of this work contained a \emph{different} and incorrect
+uniqueness proof, and that automated testing can refute a proof but never
+confirm one; Lemma~\ref{lem:active-cover} and
+Proposition~\ref{prop:uniqueness} should be read independently.
 
 \subsection{The worked example}
 \label{sec:results-worked}
@@ -1225,12 +1317,15 @@ matter for how the results should be used.
 \item[The route oracle is certified but not guaranteed fast.] In the
   worst case it can still degrade to checking every route, since the
   underlying problem is NP-hard \citep{nguyen2023}.
-\item[Uniqueness of the optimal allocation is not proved.] We establish
-  only partial strict convexity (Proposition~\ref{prop:partial-strict}),
-  which is not enough to rule out a flat set of minimisers; see
-  Remark~\ref{rem:uniqueness-open} for exactly what is missing. The
-  numerical evidence in Section~\ref{sec:results-uniqueness} is
-  consistent with uniqueness but does not establish it.
+\item[The uniqueness proof deserves an independent reading.] Uniqueness
+  is proved (Lemma~\ref{lem:active-cover},
+  Proposition~\ref{prop:uniqueness}) for $0<m\le1$ when $V^{\star}<1$,
+  via an active-cover argument rather than strict convexity of $G$, which
+  genuinely fails. An earlier version of this work contained a different
+  and \emph{incorrect} uniqueness proof. Automated testing can refute a
+  proof but never confirm one, so this result -- like the convexity
+  theorem itself -- should be checked independently before it is relied
+  on.
 \item[Novelty has not been independently confirmed.] The literature
   search behind Section~\ref{sec:litreview} found no exact match, but it
   is a keyword search, not a systematic review, and should be checked
@@ -1304,6 +1399,17 @@ every table and figure in this paper are available at
 F.~Bloch, K.~Chatterjee, and B.~Dutta.
 \newblock Attack and interception in networks.
 \newblock \emph{Theoretical Economics}, 18(4):1511--1546, 2023.
+
+\bibitem[Kovenock and Roberson(2018)]{kovenock2018}
+D.~Kovenock and B.~Roberson.
+\newblock The optimal defense of networks of targets.
+\newblock \emph{Economic Inquiry}, 56(4):2195--2211, 2018.
+
+\bibitem[Oruganti et al.(2023)]{oruganti2023}
+P.~S. Oruganti, P.~Naghizadeh, and Q.~Ahmed.
+\newblock The impact of network design interventions on the security of
+  interdependent systems.
+\newblock arXiv:2302.05411, 2023.
 
 \bibitem[Bozbay and Vesperoni(2018)]{bozbay2018}
 I.~Bozbay and A.~Vesperoni.

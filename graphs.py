@@ -10,7 +10,8 @@ import networkx as nx
 import numpy as np
 
 __all__ = ["chain", "parallel_chains", "unequal_branches", "layered", "grid_dag",
-           "grid_bypass", "random_dag", "lecture_example", "diamond", "CATALOG"]
+           "grid_bypass", "random_dag", "lecture_example", "diamond",
+           "arc_contest_graph", "CATALOG"]
 
 
 def chain(n):
@@ -154,6 +155,48 @@ def lecture_example():
     nx.add_path(G, ["S", "j1", "D"])
     G.add_edge("i1", "j1")
     return G, "S", "D"
+
+
+
+def arc_contest_graph(G, S, D, prefix="a"):
+    """Turn ARC contests into node contests by splitting every arc into a node.
+
+    FORMULATION.md S9 lists "node contests only" as a limitation and calls the
+    arc-contest case "a straightforward relabelling".  This is that relabelling,
+    implemented so the claim can be tested rather than asserted.
+
+    Construction (the line-graph transform, with endpoints handled).  Every arc
+    `(u, v)` of `G` becomes a node `a[u>v]` of `G'`; arcs `(u,v)` and `(v,w)`
+    that meet head-to-tail become an edge of `G'`; a fresh source `S'` feeds
+    every node coming from an arc out of `S`, and every node coming from an arc
+    into `D` feeds a fresh terminus `D'`.
+
+    The correspondence is a bijection between `S-D` paths of `G` and `S'-D'`
+    paths of `G'`, under which the ARCS traversed by a path in `G` are exactly
+    the CONTESTED NODES of the corresponding path in `G'`.  So contesting the
+    arcs of `G` is the same game as contesting the nodes of `G'`, and every
+    result in this repository applies verbatim after the transform -- which is
+    what "a straightforward relabelling" was claiming.  `[T-24]` checks the
+    bijection and the resulting value against a closed form.
+
+    Returns `(G_prime, S_prime, D_prime, arc_of_node)` where `arc_of_node` maps
+    each contested node of `G'` back to its arc `(u, v)` of `G`.
+    """
+    H = nx.DiGraph()
+    Sp, Dp = f"{prefix}_SRC", f"{prefix}_SNK"
+    name = {}
+    for u, v in G.edges():
+        name[(u, v)] = f"{prefix}[{u}>{v}]"
+    H.add_nodes_from(name.values())
+    for (u, v) in G.edges():
+        for w in G.successors(v):
+            H.add_edge(name[(u, v)], name[(v, w)])
+    for v in G.successors(S):
+        H.add_edge(Sp, name[(S, v)])
+    for u in G.predecessors(D):
+        H.add_edge(name[(u, D)], Dp)
+    arc_of_node = {n: a for a, n in name.items()}
+    return H, Sp, Dp, arc_of_node
 
 
 CATALOG = {

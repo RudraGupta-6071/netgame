@@ -58,8 +58,11 @@ import closed_form as cf
 import graphs
 import repro
 import tolerances as tolcfg
+from baselines import (nss_constraint_generation, nss_style_oracle,
+                       rrl_evolutionary)
 from core import (PathOracle, enumerate_paths, evader_alloc, game_value,
                   heuristic_allocation, relevant_nodes, solve_defender)
+from relaxation import bracket_m_gt_1, relaxed_lower_bound
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
 os.makedirs(OUT, exist_ok=True)
@@ -527,6 +530,10 @@ def E7_scaling():
         r = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=200,
                            oracle=orc)
         dt = time.time() - t0
+        # same instance under the plain Kelley master, for the comparison that
+        # motivated switching the default to the stabilised one
+        rk = solve_defender(G, S, D, 10.0, 10.0, tol=1e-9, max_iter=200,
+                            oracle=orc, master="kelley")
         exact = cf.layered_value(L, w, 10.0, 10.0)
         touched = orc.best_response(r["x_vec"], 10.0)["n_evaluated"]
         cc = cert_cols(r)
@@ -535,26 +542,35 @@ def E7_scaling():
                          paths=f"{n_paths:,}", contested=L * w,
                          V_star=f"{r['value']:.3e}", closed_form=f"{exact:.3e}",
                          abs_err=f"{abs(r['value']-exact):.1e}",
-                         paths_touched=touched, **cc))
+                         paths_touched=touched,
+                         kelley_gap=f"{rk['gap']:.1e}",
+                         kelley_cert="yes" if rk["certified"] else "no",
+                         kelley_iters=rk["iterations"], **cc))
         print(f"  L={L} w={w}: {n_paths:>12,} S-D paths, solver evaluated "
               f"{touched} of them, V*={r['value']:.3e}, {dt:.2f}s, "
               f"certified={cc['certified']}")
     table(rows, ["graph", "nodes", "contested", "paths", "V_star",
-                 "closed_form", "abs_err", "abs_gap", "tol", "certified",
-                 "paths_touched", "iters", "sec"])
+                 "closed_form", "abs_err", "abs_gap", "certified", "iters",
+                 "kelley_gap", "kelley_cert", "kelley_iters",
+                 "paths_touched", "sec"])
+    n_box = sum(r["certified"] == "yes" for r in rows)
+    n_kel = sum(r["kelley_cert"] == "yes" for r in rows)
+    print(f"  certificate closed: {n_box}/{len(rows)} with the stabilised "
+          f"(boxstep) master, {n_kel}/{len(rows)} with plain Kelley")
     print("  READING THIS TABLE")
     print("  * V_star is the UPPER bound; on these instances it matches the")
     print("    closed form to machine precision (abs_err column).")
-    print("  * abs_gap is the residual optimality CERTIFICATE.  On the widest")
-    print("    instances Kelley's lower bound has not finished closing within")
-    print("    the 200-iteration cap, so those rows read certified=no: an")
-    print("    accurate value that is NOT proved optimal.")
+    print("  * abs_gap is the residual optimality CERTIFICATE, under the")
+    print("    stabilised (boxstep) master that is now the default.  The")
+    print("    kelley_* columns show the same instances under the plain Kelley")
+    print("    master: those are the rows that used to read certified=no.")
     print("  * paths_touched and sec are observed behaviour on this graph")
     print("    family at these sizes, on the hardware in RUN_METADATA.json.")
     print("    They are not a complexity result and do not generalise.")
     write_csv("E7_scaling.csv", rows,
               ["graph", "nodes", "contested", "paths", "V_star", "closed_form",
-               "abs_err", "paths_touched"] + CERT_HEADER + ["cert_status"])
+               "abs_err", "paths_touched", "kelley_gap", "kelley_cert",
+               "kelley_iters"] + CERT_HEADER + ["cert_status"])
 
     np_ = [float(r["paths"].replace(",", "")) for r in rows]
     sec = [float(r["sec"]) for r in rows]
@@ -611,9 +627,10 @@ def E8_intensity():
     print("  Convexity -- and therefore the validity of the lower bound, and")
     print("  so the optimality certificate -- is proved only for 0 < m <= 1.")
     print("  For m > 1 convexity provably FAILS (FORMULATION.md S3, Prop. 5),")
-    print("  so those rows are EXPLORATORY / NON-CERTIFIED: the solver still")
-    print("  runs, but no optimality claim is attached to its output until a")
-    print("  separate global method and proof are supplied.")
+    print("  so those rows are EXPLORATORY / NON-CERTIFIED: no optimality claim")
+    print("  is attached to the values below.  E10 supplies what IS available")
+    print("  there -- a valid two-sided bracket from a convex relaxation, which")
+    print("  bounds V* without certifying the allocation.")
     ms = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
     picks = ["chain-4", "parallel-3x3", "grid-4x4"]
     rows, curves = [], {}
@@ -657,6 +674,188 @@ def E8_intensity():
     return rows
 
 
+# ============================================ E9  head-to-head vs prior methods
+def E9_headtohead():
+    """Compare against the two nearest papers' SOLUTION METHODS, not heuristics.
+
+    E3/E5 compare the certified optimum against generic centrality/cut rules.
+    That is not the comparison the related-work section invites: this project
+    positions itself between Ramirez-Marquez-Rocco-Levitin (evolutionary search,
+    no certificate) and Nguyen-Song-Smith (constraint generation with a
+    log-linearised shortest-path separation).  E9 compares against ADAPTATIONS
+    of those two methods -- see baselines.py for exactly what was adapted and
+    why neither can be an apples-to-apples rerun of the published algorithm.
+
+    Two questions, kept separate because they are different claims:
+
+      (a) DEFENDER-SIDE SEARCH.  Certified cutting planes vs. RRL-style
+          evolutionary search, both scored by the SAME exact best-response
+          oracle, so the only difference is the optimiser.  Metric: excess
+          success probability, runtime, objective evaluations.
+
+      (b) PATH SEPARATION.  This project's Lagrangian-tight oracle vs. an
+          NSS-style linearised separation, everything else held fixed.  Metric:
+          paths evaluated per best response, and iterations/cuts to reach a
+          given gap -- convergence behaviour, not final value.
+    """
+    print("\n" + "=" * 78)
+    print("E9  HEAD-TO-HEAD vs THE NEAREST PAPERS' METHODS (adaptations)")
+    print("=" * 78)
+    print("  Both comparisons hold every other component fixed, so a difference")
+    print("  is attributable to the method being compared.  Neither adapted")
+    print("  method produces an optimality certificate; ours does.")
+    XA = XB = 10.0
+
+    # ---- (a) defender-side search -----------------------------------------
+    rows_a = []
+    exc = {"certified": [], "rrl_evolutionary": [], "nss_constraint_gen": [],
+           "uniform": [], "greedy": []}
+    for seed in range(10):
+        G, S, D = graphs.random_dag(12, 0.26, seed=seed)
+        r = solve_defender(G, S, D, XA, XB, tol=1e-9, max_iter=400)
+        orc = r["oracle"]
+        ga = rrl_evolutionary(G, S, D, XA, XB, oracle=orc, seed=seed,
+                              generations=120, pop_size=40)
+        ns = nss_constraint_generation(G, S, D, XA, XB, oracle=orc,
+                                       max_iter=120, tol=1e-9)
+        row = dict(seed=seed, V_certified=fmt(r["value"], 8),
+                   cert="yes" if r["certified"] else "no",
+                   sec_certified=f"{r['time']:.2f}",
+                   V_rrl=fmt(ga["value"], 8),
+                   excess_rrl=f"{excess_pct(ga['value'], r['value']):.2f}%",
+                   sec_rrl=f"{ga['time']:.2f}", evals_rrl=ga["evaluations"],
+                   V_nss=fmt(ns["value"], 8),
+                   excess_nss=f"{excess_pct(ns['value'], r['value']):.2f}%",
+                   sec_nss=f"{ns['time']:.2f}",
+                   paths_nss=ns["paths_evaluated"])
+        for kind in ("uniform", "greedy"):
+            xh = heuristic_allocation(G, S, D, XA, kind, XB=XB, oracle=orc)
+            vh = game_value(G, S, D, xh, XB, oracle=orc)["value"]
+            exc[kind].append(excess_pct(vh, r["value"]))
+        exc["certified"].append(0.0)
+        exc["rrl_evolutionary"].append(excess_pct(ga["value"], r["value"]))
+        exc["nss_constraint_gen"].append(excess_pct(ns["value"], r["value"]))
+        rows_a.append(row)
+        print(f"  seed {seed:2d}  certified {r['value']:.6f} ({r['time']:.2f}s)"
+              f"   RRL {ga['value']:.6f} (+{exc['rrl_evolutionary'][-1]:.2f}%,"
+              f" {ga['time']:.2f}s)"
+              f"   NSS {ns['value']:.6f} (+{exc['nss_constraint_gen'][-1]:.2f}%)")
+
+    table(rows_a, ["seed", "V_certified", "cert", "sec_certified",
+                   "V_rrl", "excess_rrl", "sec_rrl", "evals_rrl",
+                   "V_nss", "excess_nss", "sec_nss", "paths_nss"],
+          "(a) Defender-side search, 10 random DAGs, identical evaluation oracle")
+    write_csv("E9_headtohead.csv", rows_a)
+
+    summary = []
+    for k, v in exc.items():
+        summary.append(dict(
+            method={"certified": "this work (certified cutting planes)",
+                    "rrl_evolutionary": "RRL-style evolutionary (adapted)",
+                    "nss_constraint_gen": "NSS-style constraint gen (adapted)",
+                    "uniform": "uniform (generic heuristic)",
+                    "greedy": "greedy marginal (generic heuristic)"}[k],
+            mean_excess=f"{np.mean(v):.2f}%", worst_excess=f"{max(v):.2f}%",
+            certificate="yes" if k == "certified" else "no"))
+    table(summary, ["method", "mean_excess", "worst_excess", "certificate"],
+          "Excess success probability = 100*(V_method/V* - 1); lower is better. "
+          "Only the first row carries an optimality certificate.")
+    write_csv("E9_headtohead_summary.csv", summary)
+
+    # ---- (b) path separation ----------------------------------------------
+    print("\n  (b) PATH SEPARATION: Lagrangian-tight vs NSS-style linearised")
+    rows_b = []
+    rng = np.random.default_rng(31)
+    for name in ["grid-4x4", "grid-bypass", "random-12", "layered-3x3"]:
+        G, S, D = graphs.CATALOG[name]()
+        orc = PathOracle(G, S, D, mode="ksp")
+        n = len(orc.nodes)
+        ours, theirs, agree = [], [], 0
+        for _ in range(12):
+            x = rng.dirichlet(np.ones(n)) * XA
+            a = orc.best_response(x, XB)
+            b = nss_style_oracle(orc, x, XB, max_paths=200)
+            ours.append(a["n_evaluated"])
+            theirs.append(b["n_evaluated"])
+            agree += abs(a["logval"] - b["logval"]) <= 1e-9
+        rows_b.append(dict(graph=name, paths_total=orc.n_paths_known,
+                           lagrangian_paths=f"{np.mean(ours):.1f}",
+                           lagrangian_certified="yes",
+                           linearised_paths=f"{np.mean(theirs):.1f}",
+                           linearised_certified="no",
+                           same_best_response=f"{agree}/12"))
+        print(f"    {name:<14s} Lagrangian evaluates {np.mean(ours):.1f} paths "
+              f"(certified), linearised needs {np.mean(theirs):.1f} "
+              f"(no certificate), same answer {agree}/12")
+    table(rows_b, ["graph", "paths_total", "lagrangian_paths",
+                   "lagrangian_certified", "linearised_paths",
+                   "linearised_certified", "same_best_response"],
+          "(b) Mean paths evaluated per best response, 12 random allocations each")
+    write_csv("E9_separation.csv", rows_b)
+
+    print("\n  READING E9")
+    print("  * The adapted methods get CLOSE on value but never certify, and")
+    print("    the gap that matters is the one they cannot report at all.")
+    print("  * The Lagrangian separation stops with a proof after a couple of")
+    print("    paths; the linearised one has no stopping rule, so it must keep")
+    print("    generating and can still return a worse path.")
+    print("  * These are adaptations, not reruns of the published algorithms;")
+    print("    baselines.py states exactly what was and was not carried over.")
+    return rows_a, rows_b
+
+
+# ====================================== E10  a valid bracket for the m > 1 regime
+def E10_m_gt_1_bracket():
+    """Turn 'm > 1 is exploratory' into a two-sided bracket on V*.
+
+    For m > 1 convexity provably fails (FORMULATION.md S3, Prop. 5), so the
+    cutting-plane lower bound is invalid and E8 can only report a value with no
+    indication of how far off it is.  relaxation.py supplies a genuinely valid
+    lower bound via u = x^m plus the convex hull of the budget set, giving
+
+        V_lb  <=  V*  <=  V_ub .
+
+    This is a WEAKER certificate, not the m <= 1 one: the relaxation gap does
+    not vanish as the solver converges, so a wide bracket may mean a loose
+    relaxation rather than a bad allocation.  It is still strictly more than the
+    previous status, which was no bound at all.
+    """
+    print("\n" + "=" * 78)
+    print("E10  m > 1: A VALID TWO-SIDED BRACKET VIA CONVEX RELAXATION")
+    print("=" * 78)
+    print("  Convexity fails for m > 1, so the ordinary LOWER bound is invalid.")
+    print("  The bracket below is valid but loose; it does NOT certify that the")
+    print("  reported allocation is optimal, and is not labelled as doing so.")
+    rows = []
+    for name, build in [("chain-3", lambda: graphs.chain(3)),
+                        ("diamond", graphs.diamond),
+                        ("lecture", graphs.lecture_example),
+                        ("parallel-2x2", lambda: graphs.parallel_chains(2, 2)),
+                        ("unequal-1-2", lambda: graphs.unequal_branches([1, 2]))]:
+        G, S, D = build()
+        for m in [1.5, 2.0, 3.0]:
+            br = bracket_m_gt_1(G, S, D, 10.0, 10.0, m=m, tol=1e-9,
+                                max_iter=250)
+            rows.append(dict(graph=name, m=m,
+                             V_lb=fmt(br["value_lb"], 8),
+                             V_ub=fmt(br["value_ub"], 8),
+                             abs_gap=f"{br['abs_gap']:.2e}",
+                             relative_slack=f"{br['relative_slack']:.1%}",
+                             bracket_valid="yes" if br["bracket_valid"] else "NO",
+                             certified_optimal="no",
+                             note="valid bracket, NOT an optimality certificate"))
+            print(f"  {name:<13s} m={m:<4g} V in [{br['value_lb']:.6f}, "
+                  f"{br['value_ub']:.6f}]   slack {br['relative_slack']:.1%}")
+    table(rows, ["graph", "m", "V_lb", "V_ub", "abs_gap", "relative_slack",
+                 "bracket_valid", "certified_optimal"],
+          "Valid bracket on V* for m > 1 (relaxation-based lower bound)")
+    write_csv("E10_m_gt_1_bracket.csv", rows)
+    print("\n  The bracket widens with m: the convex hull of the budget set is a")
+    print("  looser and looser outer approximation as the exponent grows. That")
+    print("  is a property of the RELAXATION, not evidence about the allocation.")
+    return rows
+
+
 # ---------------------------------------------------------------- drawing
 def _draw(G, S, D, x, fname, title):
     try:
@@ -696,7 +895,8 @@ def _draw(G, S, D, x, fname, title):
 # ------------------------------------------------------------------- main
 ALL = {"E1": E1_benchmarks, "E2": E2_lecture, "E3": E3_topologies,
        "E4": E4_budget_sweep, "E5": E5_baselines, "E6": E6_convergence,
-       "E7": E7_scaling, "E8": E8_intensity}
+       "E7": E7_scaling, "E8": E8_intensity, "E9": E9_headtohead,
+       "E10": E10_m_gt_1_bracket}
 
 
 def main(argv):

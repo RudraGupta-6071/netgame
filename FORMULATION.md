@@ -230,53 +230,141 @@ therefore labelled **exploratory / non-certified** throughout (E8,
 output), and will stay so unless a separate global method and proof are
 supplied.
 
-### 3.1 Uniqueness of `x*` — OPEN, and a retracted proof
+### 3.1 Uniqueness of `x*` — RESOLVED (was open; a retracted proof is recorded below)
 
-> **RETRACTION.** An earlier version of this file contained a "Proposition 4b"
-> claiming `G` is strictly convex and therefore `x*` is unique. **That proof
-> was wrong** and the claim is withdrawn. The error is recorded below, because
-> it is instructive and because the repo history still contains it.
+> **STATUS.** Uniqueness of the optimal defender allocation is **proved** below
+> (Lemma 2 + Proposition 4c), for `0 < m ≤ 1` in the non-degenerate case
+> `V* < 1`. An earlier version of this file claimed uniqueness via a *different*
+> and **wrong** argument; that retraction is kept at the end of this subsection,
+> both because the error is instructive and because the fix is precisely the
+> step the retraction identified as missing.
+>
+> Like Proposition 4, this is a proof, and the repository cannot check a proof —
+> only look for counterexamples. `[T-21]` and `[T-22]` search for
+> counterexamples to Lemma 2 and to Proposition 4c and find none, which is
+> corroboration, not verification. **This argument should be read by a second
+> qualified reader before it is relied on in a submission** (see §9).
 
-**The error.** The proof asserted that since `h(x,y) = Σ_{i∈P°} φ_i(x_i,y_i)`
-sums strictly-convex terms over disjoint coordinates, it is strictly convex
-*in the full vector `x`* — so that `x ≠ x'` implies a strict inequality. This
-is false. `h` (and hence `g_P`) depends **only on the coordinates lying on
-`P`**. If `x` and `x'` differ *only* at nodes off `P`, then
+Throughout: `0 < m ≤ 1`, the defender's feasible set is
+`Δ_A = {x ≥ 0 : Σ_i x_i = x̄_A}` over the relevant nodes `V°`, `n = |V°| ≥ 2`,
+and `G(x) = max_P g_P(x)`. Call a path `P` **active at `x`** when it attains
+`g_P(x) = G(x)`. Write `V* = exp(G(x*))` for the optimal value, and assume the
+**non-degenerate case `V* < 1`**, i.e. `G(x*) < 0`. (If `V* = 1` the defender
+cannot cover every path at all, `G ≡ 0` on a whole face, and uniqueness genuinely
+fails; §1.2 characterises exactly when this happens.)
 
-    h_P(x, y) = h_P(x′, y)
+**Lemma 2 (active cover).** Let `x*` minimise `G` over `Δ_A`. If `x*_v > 0`
+then `v` lies on at least one path active at `x*`.
 
-and the inequality is an equality, not a strict one. The same failure
-propagates to `g_P` and to `G = max_P g_P`. So `G` is **not** strictly convex
-on the simplex, and "strictly convex ⇒ unique minimiser" does not apply.
+*Proof.* Suppose not: every path through `v` is inactive, so
 
-**What survives (Proposition 4b′, partial strict convexity).** Let `m = 1`,
-let `x ≠ x'`, `t ∈ (0,1)`, `z = tx+(1−t)x′`, and let `P*` attain the max in
-`G` at `z`. If `x` and `x'` differ in **at least one coordinate of `P*°`**,
-and the evader's optimal split `y*` at `z` is strictly positive on `P*°`, then
+    δ  :=  G(x*) − max{ g_P(x*) : v ∈ P° }  >  0
+
+(the max over an empty set is `−∞`, in which case any `δ > 0` works). For
+`ε ∈ (0, x*_v)` define `x^ε` by moving `ε` off `v` and spreading it over *all*
+the other relevant nodes:
+
+    x^ε_v = x*_v − ε ,        x^ε_i = x*_i + ε/(n−1)   for i ∈ V° \ {v} .
+
+`x^ε ∈ Δ_A` by construction. Take any path `P`.
+
+* If `v ∈ P°`: `g_P` is continuous in `x`, so `g_P(x^ε) → g_P(x*) ≤ G(x*) − δ`
+  as `ε → 0`. Hence there is `ε_P > 0` with `g_P(x^ε) < G(x*)` for `ε < ε_P`.
+* If `v ∉ P°`: **every** node of `P°` is a node other than `v`, so every one of
+  them strictly gains budget. `g_P` is strictly decreasing in each `x_i`,
+  `i ∈ P°` (Prop. 3 gives `∂g_P/∂x_i < 0` for `x_i > 0`; at `x_i = 0` raising
+  `x_i` off zero strictly lowers `p_i` from 1 by (C1)), and `P°  ≠ ∅` in the
+  non-degenerate case. Hence `g_P(x^ε) < g_P(x*) ≤ G(x*)`.
+
+There are finitely many simple paths, so taking `ε` below the minimum of the
+finitely many `ε_P` gives `G(x^ε) = max_P g_P(x^ε) < G(x*)`, contradicting the
+optimality of `x*`. ∎
+
+This is exactly the step the retraction below flagged as missing: the freed
+budget is spread over a set meeting **every** active path simultaneously, and
+`V° \ {v}` is such a set precisely because `v` sits on no active path.
+
+**Proposition 4c (uniqueness of the optimal allocation).** For `0 < m ≤ 1` and
+`V* < 1`, the minimiser of `G` over `Δ_A` is unique.
+
+*Proof.* Let `x` and `x'` both minimise `G`, and set `z = ½(x + x')`. By
+convexity (Prop. 4), `G(z) ≤ ½G(x) + ½G(x') = G(x*)`, and `G(z) ≥ G(x*)`
+because `x*` is a minimum; so **`z` is itself a minimiser** and
+`G(z) = G(x*)`.
+
+Suppose `x ≠ x'`, and pick `i` with `x_i ≠ x'_i`. At least one of `x_i, x'_i`
+is positive, and both are `≥ 0`, so `z_i > 0`. By Lemma 2 applied to the
+minimiser `z`, the node `i` lies on some path `P*` active at `z`. Let `y*` be
+the evader's optimal split on `P*` at `z`, which is unique (Prop. 1 on the
+active set).
+
+Two facts about the coordinates of `P*°`:
+
+* For `j ∈ P*°` with `z_j > 0` the evader must spend there (`y*_j = 0` against
+  `z_j > 0` would mean `p_j = 0`, value `−∞`), so `y*_j > 0`.
+* For `j ∈ P*°` with `z_j = 0` we get `y*_j = 0` and, since `z_j = ½(x_j+x'_j)`
+  with both terms `≥ 0`, also `x_j = x'_j = 0`. So `x`, `x'` and `z` all vanish
+  on those coordinates, and by (C1) each contributes `0` to `h(·, y*)` at all
+  three points.
+
+Because of the second fact, along the segment joining `x` and `x'` the function
+`h(·, y*)` never evaluates a "`y_j = 0` against `x_j > 0`" term, so
+`h(·, y*) ≤ g_{P*}` holds at `x`, `x'` and `z`, and `h(·, y*)` is convex there —
+strictly convex in each coordinate `j` with `y*_j > 0`, since
+`x_j ↦ −log(x_j^m + (y*_j)^m)` has
+
+    d²/dx² [−log(x^m + c)] = −m x^{m−2} [ (m−1)c − x^m ] / (x^m + c)²  >  0
+
+for `c > 0`, `x > 0` and `0 < m ≤ 1` (both bracketed terms are `≤ 0`, and
+strictly so for the `−x^m` part), extended to `x = 0` by continuity. Our chosen
+`i` has `z_i > 0`, hence `y*_i > 0`, and `x_i ≠ x'_i`. Therefore
 
     G(z) = g_{P*}(z) = h(z, y*)
-         < t·h(x,y*) + (1−t)·h(x′,y*)      (strict: they differ on P*°)
-         ≤ t·g_{P*}(x) + (1−t)·g_{P*}(x′)   (h(·,y*) ≤ g_{P*})
-         ≤ t·G(x) + (1−t)·G(x′).            (g_{P*} ≤ G)          ∎
+         <  ½ h(x, y*) + ½ h(x', y*)      (strict in coordinate i)
+         ≤  ½ g_{P*}(x) + ½ g_{P*}(x')
+         ≤  ½ G(x) + ½ G(x')  =  G(x*) ,
 
-The hypothesis "differ somewhere on `P*°`" cannot be dropped — that is exactly
-the gap above.
+contradicting `G(z) = G(x*)`. Hence `x = x'`. ∎
 
-**What closing it would require.** One would have to rule out two distinct
-minimisers differing only at nodes lying off *every* path active at their
-midpoint. Informally such nodes carry budget doing no work, and one expects
-the optimum to push it onto active paths; making that precise needs an
-argument that the freed budget can be spread over a set of nodes meeting
-**every** active path simultaneously (adding budget to a single node only
-lowers the paths through that node, so a single node does not suffice). That
-argument is not written out here.
+**What made the difference.** The retracted argument tried to get uniqueness
+from strict convexity of `G` on the whole simplex, which is false. Proposition
+4c never claims that. It only needs strict convexity *in the coordinates of one
+active path through one coordinate where the two candidates differ*, and Lemma 2
+is what guarantees such an active path exists. `G` is still **not** strictly
+convex: two points differing only at a node that is off every active path and
+carries zero budget give equality — Lemma 2 says such a node carries no budget
+at an optimum, which is enough for uniqueness without strict convexity.
 
-**Status of the numerical evidence.** `[T-14]` shows the solver reaches the
-same `x*` (coordinate-wise, to `< 5e-3`; observed spread `2.0e-5`) from three
-unrelated starting points on four topologies. This is **evidence consistent
-with** uniqueness, not a proof: a deterministic algorithm can return
-repeatable output on a problem with a flat minimising face, since nothing
-forces it to explore the flat directions.
+**Consequences for the rest of this document.**
+
+* The four closed-form families of §6 have **unique** optimal allocations, so
+  the symmetric allocations derived there are *the* optima, not merely *an*
+  optimum. The hedge "convexity plus symmetry shows a symmetric allocation
+  attains the optimum; it does not assert it is the only one" is no longer
+  needed for `V* < 1`.
+* `[T-14]`'s repeated-starting-point agreement is now a *consistency check on
+  the solver* against a proved theorem, rather than the evidence the claim
+  rests on.
+
+---
+
+> **RETRACTION (kept for the record).** An earlier version of this file
+> contained a "Proposition 4b" claiming `G` is strictly convex and therefore
+> `x*` is unique. **That proof was wrong.** It asserted that because
+> `h(x,y) = Σ_{i∈P°} φ_i(x_i,y_i)` sums strictly-convex terms over disjoint
+> coordinates, it is strictly convex *in the full vector `x`*. It is not: `h`
+> (and hence `g_P`) depends **only on the coordinates lying on `P`**, so if `x`
+> and `x'` differ only at nodes off `P` then `h_P(x,y) = h_P(x′,y)` — equality,
+> not strict inequality — and the same failure propagates to `G = max_P g_P`.
+> `G` is genuinely not strictly convex on the simplex, and
+> "strictly convex ⇒ unique minimiser" does not apply to it.
+>
+> The retraction correctly identified what a repair would need: *"an argument
+> that the freed budget can be spread over a set of nodes meeting every active
+> path simultaneously (adding budget to a single node only lowers the paths
+> through that node, so a single node does not suffice)."* Lemma 2 above is that
+> argument — the set is `V° \ {v}`, and it works because a node off every active
+> path can be emptied without raising any active path's value.
 
 ---
 
@@ -297,13 +385,39 @@ certification possible.
 
 **Proposition 6 (separable upper bound).** Define
 
-    ψ(x_i, λ) = max_{y ≥ 0} [ log p_i(y) − λ y ]   ( ≤ 0,  = 0 when x_i = 0 ).
+    ψ(x_i, λ) = max_{y ≥ 0} [ log p_i(y) − λ y ] .
 
 By concavity (Prop. 1) and Slater, for **every** `λ > 0`
 
     g_P(x)  ≤  λ x̄_B + Σ_{i ∈ P°} ψ(x_i, λ) ,                              (2)
 
 with equality at the optimal `λ`. `[T-4]`
+
+**Lemma 1 (sign of `ψ`, so that the node costs are non-negative).** For every
+`x_i ≥ 0` and every `λ > 0`,
+
+    ψ(x_i, λ) ≤ 0 ,     with equality exactly when x_i = 0 .
+
+*Proof.* Fix `y ≥ 0`. Since `x_i^m ≥ 0`, the denominator dominates the
+numerator,
+
+    p_i(y) = y_i^m / (x_i^m + y_i^m) ≤ 1     ⟹     log p_i(y) ≤ 0 ,
+
+and `λ y ≥ 0` because `λ > 0` and `y ≥ 0`. Hence the objective
+`log p_i(y) − λ y ≤ 0` **pointwise in `y`**, so its supremum over `y ≥ 0`
+satisfies `ψ(x_i, λ) ≤ 0`.
+
+For equality: if `x_i = 0` then `p_i(y) = 1` for every `y > 0` by (C1), so the
+objective is `−λ y`, whose supremum over `y ≥ 0` is `0`, attained at `y = 0`.
+If `x_i > 0` then `log p_i(y) < 0` strictly for every finite `y`, and
+`log p_i(y) − λ y → −∞` at both ends (`y → 0⁺` and `y → ∞`), so the continuous
+objective attains its maximum at an interior point where it is strictly
+negative; hence `ψ(x_i, λ) < 0`. ∎
+
+This is what licenses the shortest-path reduction below: the node costs
+`c_i(λ) = −ψ(x_i, λ)` are **non-negative**, so Dijkstra applies and no
+general-weight (Bellman–Ford) shortest-path algorithm is needed. `[T-4, T-17]`
+check the sign numerically; the proof above is what the claim rests on.
 
 The right-hand side is **additive over the nodes of `P`**, so
 
@@ -505,11 +619,38 @@ a chain in the per-layer values, giving
     V* = ( x̄_B / (x̄_A/w + x̄_B) )^L .
 
 **Within this family the value depends on layer width and depth only — not on
-the number of paths.** A layered graph with `1.7 × 10⁷` paths and a parallel one
-with `3` can have identical values: `parallel-3x3` (3 paths) and `layered-3x3`
-(27 paths) both give exactly `0.421875`. This is a statement about these
-symmetric families, established by the derivations above; it is not a general
-claim that path count never matters, and it is not a complexity result.
+the number of paths.** This is not merely an observation on the tested
+instances; for these families it is a corollary of (b) and (c), which is worth
+stating precisely because "number of paths" is the first complexity measure a
+reader reaches for.
+
+**Corollary 1 (the path count does not determine the value).** Fix `w ≥ 1`,
+`L ≥ 1` and budgets `x̄_A, x̄_B > 0`. Let
+
+* `G₁` be `w` node-disjoint identical chains of length `L`, which has exactly
+  **`w` distinct `S–D` paths**; and
+* `G₂` be the complete layered DAG with `L` layers of width `w`, which has
+  exactly **`w^L` distinct `S–D` paths**.
+
+Then by (b) and (c) respectively,
+
+    V*(G₁)  =  ( x̄_B / (x̄_A/w + x̄_B) )^L  =  V*(G₂) ,
+
+while the ratio of their path counts is `w^{L−1}`, which is unbounded in `L`
+for any `w ≥ 2`. Hence **no function of the path count alone can determine the
+game value**: two graphs whose path counts differ by an arbitrarily large factor
+have exactly the same value, at every budget pair. ∎  `[T-23]`
+
+*What the corollary does and does not say.* It refutes "path count determines
+the value" by explicit construction — one counterexample family suffices for a
+negative claim. It does **not** say path count is irrelevant on every topology,
+and it says nothing about *running time*: the empirical observation that the
+oracle evaluates few paths on large layered instances (§4, E7) is separate, is
+measured rather than proved, and is reported as observed performance on the
+tested family. What the corollary does explain is *why* the two quantities come
+apart at all: `V*` is governed by `(w, L)` — how wide the cuts are and how many
+of them the evader must cross — while the path count `w^L` is a derived quantity
+that varies independently of the pair `(w, L)` that actually sets the value.
 
 **(d) Node-disjoint branches of unequal lengths `L_1,…,L_r`.** Every branch
 must be defended (an undefended branch has value 1), so all branches are active
@@ -547,6 +688,13 @@ gap closed within the stated tolerance.
 | Min-cut intuition is not enough | `mincut` baseline: mean excess **+220.9 %**, worst **+578.7 %** (E5) |
 | Centrality can be catastrophic | `betweenness` scores `V = 1` on the lecture topology (E2) |
 | Topology, not size, drives the value | E4: the `x̄_A/x̄_B` response curve differs sharply between chain, grid and random DAGs |
+| Uniqueness of `x*` | **proved** (Lemma 2 + Prop. 4c, §3.1); `[T-21]` finds no counterexample to Lemma 2 over 35 instances, `[T-22]` confirms the solver lands on the same `x*` from 5 unrelated starts |
+| Path count does not determine the value | **proved** (Corollary 1, §6): `w` parallel chains and the `w^L`-path layered DAG have identical value at every budget pair; `[T-23]` |
+| Against the nearest papers' own methods | E9: an RRL-style evolutionary search lands **+3.64 %** above the optimum on average (worst +6.31 %) and an NSS-style linearised constraint generation **+0.61 %** (worst +3.03 %) — both far better than generic heuristics (uniform +204.60 %), and **neither produces any optimality certificate** |
+| The certified oracle's advantage is the stopping rule, not the answer | E9(b): on the same instances the Lagrangian separation evaluates **2** paths and certifies; the linearised separation finds the *same* best response but, having no stopping rule, exhausts all 13–57 paths |
+| `m > 1` is boundable even though it is not certifiable | E10: the `u = x^m` relaxation gives a **valid** two-sided bracket (e.g. diamond at `m = 2`: `V* ∈ [0.667, 0.800]`), which is not an optimality certificate |
+| Stabilising the master closes the open certificates | E7: plain Kelley leaves 8 of 13 layered instances uncertified at the 200-iteration cap; the boxstep master certifies **all 13**, including the 48-contested-node instance (gap `2.1e−3 → 7.2e−10`) in ~¼ the iterations `[T-27]` |
+| Arc contests are genuinely a relabelling | `[T-24]`: the line-graph transform sends a chain with `n` contested nodes to one with `n+1`, and the solver reproduces the corresponding closed form to `2.8e−17` |
 | Contest intensity helps whoever concentrates | E8: `V*` is **flat in `m`** on a single chain (`0.0625` for every `m`, since `x̄_A = x̄_B` forces `p_i = ½` at any `m`), but rises from `0.118` to `0.940` on `grid-4x4` as `m` goes `0.25 → 3`. Where the defender must spread over parallel routes and the evader can concentrate, economies of scale favour the **evader**. The `m > 1` half of that sweep is **exploratory / non-certified** (§3) |
 
 **Reproducibility.** Every experiment run writes `out/RUN_METADATA.json` with
@@ -596,6 +744,40 @@ algorithm with no optimality guarantee; the convexity result (§3) lets us
 replace it with a certified convex method for `m ≤ 1` — while §3's
 counterexample explains why they needed a metaheuristic in the `m > 1` regime.
 
+**Oruganti, Naghizadeh & Ahmed (2023), *The Impact of Network Design
+Interventions on the Security of Interdependent Systems*, arXiv:2302.05411.**
+Structurally the closest relative found in any of our searches, and the one a
+reader from the attack-graph literature is most likely to raise. The skeleton is
+the same as ours in four respects: it is a **Stackelberg** game with the
+defender moving first; the defender spreads a **single budget** `Σ_i x_i ≤ B`
+over the **nodes of a DAG**; the attacker's action is to **choose a path**; and
+the payoff along a path is a **product of per-node terms**, giving a
+`min_x max_P Π` objective of exactly our shape.
+
+The decisive difference is that **their model contains no attacker-side
+investment, and therefore no contest at any node.** Their per-node compromise
+probability is a function of the *defender's* investment alone,
+
+    p_i(x_i) = p_i⁰ · e^(−κ_i x_i) ,
+
+with `p_i⁰ ∈ (0,1]` the undefended compromise probability and `κ_i ≥ 1` a
+per-node sensitivity; the attacker picks a path and nothing else. In `netgame`
+the second player is also budget-constrained and also invests **node by node**,
+and `p_i = y_i^m/(x_i^m + y_i^m)` is a ratio-form (Tullock) **contest** between
+the two investments. That single change is what generates everything specific to
+this project: the inner maximisation over `y` (§2) and its KKT reduction, the
+Lagrangian relaxation of that inner problem into a shortest-path oracle (§4),
+and the convexity theorem (§3), whose whole content is about how `g_P` depends
+on `x` *after* the evader has re-optimised against it. None of these has a
+counterpart in a model where the attacker only chooses a path. Their objective
+also sums a per-node loss `L_i` along the path (cumulative damage from a
+stepping-stone attack) where ours is a single survival product, and their
+exponential form makes each path objective log-**linear** in `x`, where ours is
+log-concave-composed; the two convexity analyses are therefore not the same
+argument. Their §II asserts strict convexity and uniqueness for their objective;
+we make the corresponding claim for ours only through Lemma 2 and Prop. 4c
+(§3.1), which do not rely on strict convexity of the full objective.
+
 **Bloch, Chatterjee & Dutta (2023), *Attack and interception in networks*,
 Theoretical Economics.** The paper closest in spirit found in a literature
 check run alongside this project: a single attacker picks a target and a
@@ -627,16 +809,41 @@ has no counterpart there. Their contribution is about per-asset investment
 incentives under Tullock competition, not about defending a network's
 topology against a path-choosing adversary.
 
+**Kovenock & Roberson (2018), *The Optimal Defense of Networks of Targets*,
+Economic Inquiry 56(4), 2195–2211 — and the Colonel Blotto lineage.** Blotto
+games are the closest *theoretical* cousin of Tullock contests: two
+budget-constrained players simultaneously spread resources over battlefields,
+which is the simultaneous, all-pay analogue of what happens node-by-node here.
+Kovenock and Roberson's line of work on defending networks of targets — and on
+weakest-link/series–parallel reliability structures, including their comment on
+Hausken already cited in §3 — is the literature that establishes when such
+games are forced into **mixed** strategies, which is exactly the regime our
+`m > 1` counterexample (Prop. 5) runs into. The differences from this project
+are structural rather than incidental: Blotto battlefields are **independent
+targets with no path structure**, resolved by a simultaneous all-pay auction
+rather than a ratio-form contest, and the solution concept is mixed-strategy
+Nash rather than a pure Stackelberg allocation. There is no series system in
+which the attacker must survive a *sequence* of contests it has itself chosen,
+so the shortest-path reduction of §4 has no analogue. We cite this family as
+the relevant theoretical neighbourhood for the `m > 1` regime and as the natural
+comparison class for any future simultaneous-play extension (§9), not as a
+method we outperform.
+
 **On the novelty check itself.** No claim of the form "first", "only" or "no
 prior work" is made anywhere in this repository, because none of them is
 supported by a systematic literature review. What was done is narrower: a
-search covering the two supplied papers plus targeted queries on
-Tullock-contest network defense, sequential network interdiction with
-ratio-form contests, and Colonel Blotto network extensions. To the best of that
-search, no exact match was found. It did not, and cannot, replace a
-citation-tracing pass through each of the papers above (e.g. checking who has
-cited Bloch et al. or Nguyen–Song–Smith since publication) or a search
-restricted to operations research venues specifically. The accurate framing is
+search covering the two supplied papers, targeted queries on Tullock-contest
+network defense, sequential network interdiction with ratio-form contests, and
+Colonel Blotto network extensions, and a later pass that added the attack-graph
+defense literature (Oruganti et al., above) and the Blotto-on-networks line
+(Kovenock & Roberson, above). Bibliographic details for every work cited in this
+section — authors, title, venue, year — were checked against the source, and
+the model description attributed to Oruganti et al. was read off their
+formulation section rather than their abstract. To the best of that search, no
+exact match was found. It still did not, and cannot, replace a full
+citation-tracing pass through each of the papers above (e.g. enumerating
+everything that has cited Bloch et al. or Nguyen–Song–Smith since publication)
+or a search restricted to operations research venues specifically. The accurate framing is
 therefore "we study…" / "this repository implements…" / "to the best of our
 search…". **Before treating the convexity result (§3) as a novel contribution
 in a submission, this should be independently confirmed by the supervising
@@ -656,28 +863,61 @@ interdiction) far better than a keyword search can approximate.
    moved simultaneously the pure equilibrium could fail to exist and mixed
    strategies over paths would be required — the Nguyen–Song–Smith setting, and
    the natural next step.
-3. **The certificate does not always close within the iteration cap.** On the
-   widest layered instances (48–50 contested nodes) Kelley's lower bound still
-   has `~2e−3` of log-gap after 200 iterations, even though the value matches
-   the closed form to machine precision. Those runs are reported
-   `certified=no` and must not be described as proved optima. Kelley's method
-   is known to converge slowly in higher dimension; a proximal-bundle or
-   level-set master would fix this and is the obvious improvement.
+3. **The certificate now closes on every instance we test, after stabilising
+   the master.** This limitation previously read "the certificate does not
+   always close": plain Kelley left `~2e−3` of log-gap on the widest layered
+   instances (48–50 contested nodes) at the 200-iteration cap. The named fix —
+   a stabilised master — is implemented: `solve_defender(master="boxstep")`
+   adds a boxstep/trust-region step selection (the LOWER bound is still taken
+   from the *unrestricted* master, so the certificate means exactly what it did
+   before), and it certifies all 13 layered instances in roughly a quarter of
+   the iterations. It is now the default. What remains open is the *guarantee*:
+   there is still **no proven convergence rate** for either master here, only
+   the measured behaviour in E6/E7, and nothing rules out a family on which
+   boxstep also stalls.
 4. **Independence across nodes** is assumed (the payoff is a product). Real
-   detection events on a path are usually correlated.
-5. **Node contests only.** Arc contests would be a straightforward relabelling
-   (split each arc into a node), but is not implemented.
+   detection events on a path are usually correlated. See limitation 10.
+5. **Arc contests are now implemented** (this limitation is closed). Contesting
+   the *arcs* rather than the nodes is the line-graph relabelling
+   `graphs.arc_contest_graph`: every arc becomes a node, head-to-tail arc pairs
+   become edges, and `S–D` paths correspond bijectively, so every result here
+   applies after the transform. `[T-24]` checks the bijection and reproduces the
+   corresponding closed form. What is *not* covered is a model with contests on
+   both nodes and arcs simultaneously with separate budgets.
 6. **The path oracle is certified but not polynomial.** Worst-case it degrades
    to enumeration. The path-selection subproblem is closely related to
    maximum-reliability path problems known to be NP-hard, which is why we use
    certified path generation rather than claim a polynomial-time exact oracle;
    NP-hardness of the exact continuous model (★) itself is neither proved nor
    claimed here (§4).
-7. **Uniqueness of the optimal allocation is open.** The objective is convex
-   for `0 < m ≤ 1` under the stated model. This does not, by itself, imply
-   strict convexity or uniqueness of the global minimizer (§3.1).
+7. **Uniqueness is proved, but the proof wants a second reader.** §3.1 proves
+   the minimiser is unique for `0 < m ≤ 1` when `V* < 1`, via Lemma 2 rather
+   than via strict convexity (which genuinely fails). The repository can only
+   hunt for counterexamples to a proof, not verify one — and this file has
+   carried a *wrong* uniqueness proof before. Treat Lemma 2, Prop. 4c and
+   Prop. 4 alike: independently checked before they are relied on (see the
+   status box in §3.1 and item 3 of the pre-submission checklist).
 8. **Numerical results are numerical.** The inner allocation is solved to
    tolerance and rescaled, not solved symbolically; certificates are stated net
    of the tolerances in `tolerances.py`; and randomised checks validate the
    implementation on sampled instances rather than proving the underlying
    statements.
+9. **The `m > 1` bracket is valid but loose, and is not a certificate.** E10
+   brackets `V*` for `m > 1` via the `u = x^m` convexification, which is a real
+   improvement on having no bound at all. But the relaxation gap does **not**
+   shrink as the solver converges — it widens with `m`, reaching a factor of
+   124 on a 3-node chain at `m = 3` — and it never certifies that the reported
+   allocation is optimal. Characterising the `m > 1` regime properly (does a
+   mixed-strategy equilibrium take over?) remains open.
+10. **Correlated node outcomes are still assumed away.** The payoff is a strict
+   product, i.e. independent detection events along a path. A copula- or
+   Markov-based correlated model is a natural extension and is *not*
+   implemented; it would change the inner problem's separability and hence the
+   shortest-path reduction of §4, so it is a modelling project rather than a
+   relabelling. (Arc contests, by contrast, *were* only a relabelling, and are
+   now implemented — `graphs.arc_contest_graph`, `[T-24]`.)
+11. **Simultaneous play remains a separate project.** See §9 limitation 2: a
+   simultaneous version needs mixed strategies over both allocations and paths,
+   since a pure equilibrium need not exist. Nothing in this repository
+   addresses it, and the Blotto literature cited in §8 is the right starting
+   point for it.
